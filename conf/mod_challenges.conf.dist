@@ -1,0 +1,135 @@
+[worldserver]
+
+########################################
+# mod-challenges
+#
+# Opt-in challenges: Hardcore, Iron Man, Self-Found, Self-Crafted, Slow XP, Quest XP Only and Item
+# Quality Level. A character takes them at the Shrine of Challenge in its starting area, or with
+# .challenge <name>, while it is still at its starting level. A death ends Hardcore and Iron Man;
+# the others last for the character's life. The record is the characters table
+# mod_challenges_character.
+########################################
+
+#
+#    Challenges.Enable
+#        Description: Master switch. Off: no challenge can be taken and running ones are not
+#                     enforced; their records are kept.
+#        Default:     1
+
+Challenges.Enable = 1
+
+#
+#    Challenges.Hardcore.Enable
+#    Challenges.IronMan.Enable
+#    Challenges.SelfFound.Enable
+#    Challenges.SelfCrafted.Enable
+#    Challenges.SlowXP.Enable
+#    Challenges.QuestXPOnly.Enable
+#    Challenges.ItemQuality.Enable
+#        Description: Whether each challenge can be taken and is enforced. Gear rules are checked
+#                     when gear is put on, so gear worn while a challenge was switched off stays on.
+#        Default:     1
+
+Challenges.Hardcore.Enable = 1
+Challenges.IronMan.Enable = 1
+Challenges.SelfFound.Enable = 1
+Challenges.SelfCrafted.Enable = 1
+Challenges.SlowXP.Enable = 1
+Challenges.QuestXPOnly.Enable = 1
+Challenges.ItemQuality.Enable = 1
+
+#
+#    Challenges.Announce.Start
+#    Challenges.Announce.Death
+#    Challenges.Announce.Milestone
+#        Description: Tell the whole realm when a character takes a challenge, when a death ends
+#                     one, and when a challenger reaches Challenges.MilestoneLevel.
+#        Default:     1
+
+Challenges.Announce.Start = 1
+Challenges.Announce.Death = 1
+Challenges.Announce.Milestone = 1
+
+#
+#    Challenges.MilestoneLevel
+#        Description: Level that counts as beating the challenge. It is announced and recorded
+#                     (milestone_at); the challenge keeps running after it. 0 turns it off. It is
+#                     the same level for every class, so Death Knights (who start at 55) reach it
+#                     sooner.
+#        Default:     60
+
+Challenges.MilestoneLevel = 60
+
+#
+#    Challenges.LoginReminder
+#        Description: Remind a challenger at login which challenges are running.
+#        Default:     1
+
+Challenges.LoginReminder = 1
+
+#
+#    Challenges.FirstLoginWindow
+#        Description: Offer the challenges in a window when a new character first enters the
+#                     world (after its intro cinematic). The Shrine of Challenge and .challenge
+#                     work either way.
+#        Default:     1
+
+Challenges.FirstLoginWindow = 1
+
+#
+#    Challenges.BattlegroundDeathsCount
+#        Description: Whether a death in a battleground or arena ends Hardcore and Iron Man.
+#        Default:     0 - battleground and arena deaths don't count
+
+Challenges.BattlegroundDeathsCount = 0
+
+#
+#    Challenges.IronMan.AllowGroups
+#        Description: Whether an Iron Man may join groups and the Dungeon Finder. The classic
+#                     ruleset says no; 0 enforces that.
+#        Default:     1
+
+Challenges.IronMan.AllowGroups = 1
+
+#
+#    Challenges.IronMan.AllowDeathKnights
+#        Description: Whether a Death Knight may take Iron Man. Death Knights start in green and
+#                     blue gear and with First Aid, which they must take off and unlearn first.
+#        Default:     0
+
+Challenges.IronMan.AllowDeathKnights = 0
+
+#
+#    Challenges.IronMan.ExtraProfessionSkills
+#        Description: Space-separated SkillLine ids that count as professions on top of the
+#                     stock ones, for custom professions added by other modules. It stops the
+#                     profession's spells being learned; a module that sets the skill itself,
+#                     without a spell, has to check for Iron Man on its own side.
+#        Example:     "794"
+#        Default:     ""
+
+Challenges.IronMan.ExtraProfessionSkills = ""
+
+#
+#    Challenges.SelfFound.AllowGroups
+#        Description: Whether a Self-Found character may join groups and the Dungeon Finder. 0
+#                     keeps it solo; it is also taken out of any group playerbots puts it in.
+#        Default:     0
+
+Challenges.SelfFound.AllowGroups = 0
+
+#
+#    Challenges.SelfFound.StartMoneyAllowance
+#        Description: Copper a character may carry, on top of the realm's start money, when it
+#                     takes Self-Found. Gold handed over by another character can't be told apart
+#                     once carried, so more than this is refused.
+#        Default:     10000 (1 gold)
+
+Challenges.SelfFound.StartMoneyAllowance = 10000
+
+#
+#    Challenges.SlowXP.Rate
+#        Description: The share of normal experience a Slow XP character earns, from 0 to 1.
+#        Default:     0.5
+
+Challenges.SlowXP.Rate = 0.5

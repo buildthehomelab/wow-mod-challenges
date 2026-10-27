@@ -1,0 +1,168 @@
+# mod-challenges
+
+An [AzerothCore](https://www.azerothcore.org/) module (WotLK 3.3.5a) that adds opt-in challenges a
+character takes on at the start of its life:
+
+| Challenge | Rule | Ends on death |
+|-----------|------|---------------|
+| **Hardcore** | One life. The first death is announced to the realm. | yes |
+| **Iron Man** | The classic Iron Man ruleset: grey and white gear only, no talents, no professions, no enchants, no potions, elixirs, flasks, scrolls or buff food. | yes |
+| **Self-Found** | Everything comes from the character itself: no trading, auction house, guild bank, player mail or groups. | no |
+| **Self-Crafted** | Only gear the character made itself can be put on. | no |
+| **Slow XP** | Half the normal experience (configurable). | no |
+| **Quest XP Only** | Experience from quests only. | no |
+| **Item Quality Level** | Grey and white gear only. | no |
+
+Challenges can be combined, except that Iron Man can't be paired with Self-Crafted or Item Quality
+Level. A challenge can't be put down once taken. When a death ends Hardcore or Iron Man, the
+character plays on without it, and that challenge can't be taken again on that character.
+
+## Taking a challenge
+
+Each starting area has a **Shrine of Challenge** by its graveyard, and so does Acherus. Only
+characters still at their starting level (1, or 55 for Death Knights) can see it. Its menu asks
+for confirmation before a challenge is taken.
+
+A new character is also offered the challenges in a window the first time it enters the world,
+once any intro cinematic is over (`Challenges.FirstLoginWindow`). It has the same choices as the
+shrine and a "Not now" that leaves the shrine as the way back. The window comes from the server,
+so no client patch or addon is needed. The character creation screen itself can't be used: the
+3.3.5a client's glue screens have no way to send a choice to the server.
+
+The same works by command:
+
+```
+.challenge status          what is running on this character, or on the selected player
+.challenge hardcore        shows the rules; add "confirm" to take it
+.challenge ironman
+.challenge selffound
+.challenge selfcrafted
+.challenge slowxp
+.challenge questxp
+.challenge itemquality
+```
+
+## What counts as a death
+
+A death ends Hardcore and Iron Man, whatever the cause: a creature, another player, a fall or
+drowning. It ends them even when a resurrection follows, so a soulstone or a group's battle rez
+does not save the challenge. Deaths in battlegrounds and arenas don't count unless
+`Challenges.BattlegroundDeathsCount = 1`. Wintergrasp is a world zone, not a battleground, so
+deaths there count. Duels never kill.
+
+The realm is told who fell, at what level, to what, and where. The record stays in the characters
+table `mod_challenges_character`, along with when each challenge was taken and when the milestone
+level was reached.
+
+## Iron Man details
+
+Iron Man can't be taken while the character knows a profession, wears gear that breaks its rules,
+has a second talent specialization, or has a trade window open. A talent point spent before the
+challenge is refunded.
+
+- **Gear**: items above white quality can't be equipped, and neither can items with a permanent
+  enchant or a gem on them. Ammo above white can't be loaded. Bags and quivers are exempt.
+- **Talents**: none can be learned. Points still add up and become usable if the challenge ends.
+- **Professions**: no primary or secondary profession can be learned, First Aid, Cooking and
+  Fishing included. Trainers show them as unavailable. Class tools the core files as trade skills
+  (Runeforging, Poisons) still work. Custom professions from other modules can be added with
+  `Challenges.IronMan.ExtraProfessionSkills`. That blocks their spells; a module that sets its
+  skill without a spell has to check for Iron Man itself.
+- **Enchants**: gear with a permanent enchant or a gem can't be worn (see Gear). Sharpening
+  stones, weightstones, oils, armor kits and the Zul'Gurub class enchants can't be used, and the
+  trade window's "will not be traded" slot is refused, so nobody else can enchant the gear either.
+  Weapon imbues, rogue poisons and Death Knight runes are class abilities and still work.
+- **Consumables**: potions, elixirs, flasks, scrolls, glyphs and food that gives Well Fed can't be
+  used. Plain food and drink are fine, and so is a potion a quest hands out to be used.
+- **Playerbots**: an Iron Man logged in as an alt bot still can't learn talents or wear banned
+  gear, but the bot "maintenance" command puts enchants, gems and glyphs on directly. Those come
+  off again when the character logs in, levels up or changes map. Turning off
+  `AiPlayerbot.AltMaintenanceGemsEnchants` and `AiPlayerbot.AltMaintenanceGlyphs` avoids it.
+- **Groups**: allowed by default. `Challenges.IronMan.AllowGroups = 0` enforces the classic
+  solo rule, the same way as for Self-Found below.
+
+## Self-Found details
+
+- **Closed**: the trade window (both ways), the auction house window, bidding on auctions, the
+  guild bank, and player mail (sending, and receiving from players). Mail from quests and the game
+  itself still arrives.
+- **Groups**: none by default (`Challenges.SelfFound.AllowGroups = 0`): no invites, no Dungeon
+  Finder, and Self-Found can't be taken while in a group. A Self-Found character that playerbots
+  adds to a group directly is taken out of it within a moment.
+- **Before it starts**: Self-Found can't be taken while the mailbox holds what another character
+  sent, while the character owns an account-bound item, carries more than the start money plus
+  `Challenges.SelfFound.StartMoneyAllowance` (1 gold), is mounted, or has a companion out. Mounts
+  and companions it knows when it takes the challenge are given back, a vendor pet it bought
+  included, since modules that share them across an account teach them at the first login. Class
+  mounts stay. The account's other characters keep what they share.
+- **Not covered**: a repair paid from the guild bank.
+- **Other modules**: shared items that a module hands out itself (an account-wide bank, an
+  account wallet, an auction of its own) need a check in that module. `src/ChallengesApi.h` gives
+  them `Challenges::IsSelfFound(guid)`; see the comment at its top.
+
+## Self-Crafted, XP and Item Quality details
+
+- **Self-Crafted**: an item can be put on only if it carries this character's maker's mark. What
+  the character wears when it takes the challenge stays on. Bags, quivers, shirts and tabards
+  don't count.
+- **Slow XP**: every source of experience is cut to `Challenges.SlowXP.Rate` (half by default).
+  Rested experience follows from the cut amount.
+- **Quest XP Only**: kills, exploring and battlegrounds give no experience. A hunter's pet still
+  gets its share from kills, so it keeps up.
+- **Item Quality Level**: items above white quality can't be equipped. Unlike Iron Man, enchants
+  and everything else are allowed.
+
+## Configuration
+
+See `conf/mod_challenges.conf.dist`. Every option has a comment.
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `Challenges.Enable` | `1` | Master switch |
+| `Challenges.<Name>.Enable` | `1` | Each challenge on or off (`Hardcore`, `IronMan`, `SelfFound`, `SelfCrafted`, `SlowXP`, `QuestXPOnly`, `ItemQuality`) |
+| `Challenges.Announce.Start` / `.Death` / `.Milestone` | `1` | Realm-wide announcements |
+| `Challenges.MilestoneLevel` | `60` | Level that counts as beating a challenge (announced; it keeps running) |
+| `Challenges.LoginReminder` | `1` | Remind challengers at login |
+| `Challenges.FirstLoginWindow` | `1` | Offer the challenges in a window on a new character's first login |
+| `Challenges.BattlegroundDeathsCount` | `0` | Whether battleground and arena deaths end Hardcore and Iron Man |
+| `Challenges.IronMan.AllowGroups` | `1` | Whether Iron Men may group |
+| `Challenges.IronMan.AllowDeathKnights` | `0` | Whether Death Knights may take Iron Man |
+| `Challenges.IronMan.ExtraProfessionSkills` | `""` | Extra SkillLine ids treated as professions |
+| `Challenges.SelfFound.AllowGroups` | `0` | Whether Self-Found characters may group |
+| `Challenges.SelfFound.StartMoneyAllowance` | `10000` | Copper on top of the start money a character may carry when it takes Self-Found |
+| `Challenges.SlowXP.Rate` | `0.5` | Share of normal experience for Slow XP |
+
+## Requirements
+
+- AzerothCore WotLK (3.3.5a), a recent master: the module uses the PlayerScript hooks for
+  learning spells and talents, trainer spell states, trade items and the first login.
+- No client patch and no addon.
+- Optional: modules that share items across an account can keep Self-Found characters out
+  through `src/ChallengesApi.h` (see above).
+
+## Installation
+
+```
+cd modules
+git clone https://github.com/buildthehomelab/wow-mod-challenges.git mod-challenges
+```
+
+Then re-run CMake and rebuild the worldserver. Clone into the `mod-challenges` folder: the loader
+symbol comes from the folder name. The SQL in `data/sql` is applied by the AzerothCore updater
+(`db-world` and `db-characters`). No client patch is needed.
+
+IDs used: gameobject entry, spawn guids, npc_text and the runtime gossip menu id 9503800-9503899
+(the module uses 9503800-9503808).
+
+To remove the module, run the files in `data/sql/uninstall`. The characters file drops the
+challenge records.
+
+## Credits
+
+The shrine spots by each starting graveyard come from
+[mod-challenge-modes](https://github.com/ZhengPeiRu21/mod-challenge-modes) (MIT), which also
+inspired this module and its list of challenges.
+
+## License
+
+Released under the MIT License.
