@@ -5,7 +5,7 @@ character takes on at the start of its life:
 
 | Challenge | Rule | Ends on death |
 |-----------|------|---------------|
-| **Hardcore** | One life. The first death is announced to the realm. | yes |
+| **Hardcore** | One life. The first death is announced to the realm. Mail, trade and groups only within 5 levels, no auction house, no Dungeon Finder, no experience above 1x. Can be finished at 60, 70 or 80. Account-wide titles. | yes |
 | **Iron Man** | The classic Iron Man ruleset: grey and white gear only, no talents, no professions, no enchants, no potions, elixirs, flasks, scrolls or buff food. | yes |
 | **Self-Found** | Everything comes from the character itself: no trading, auction house, guild bank, player mail or groups. | no |
 | **Self-Crafted** | Only gear the character made itself can be put on. | no |
@@ -33,6 +33,7 @@ The same works by command:
 
 ```
 .challenge status          what is running on this character, or on the selected player
+.challenge finish          finishes Hardcore once a milestone is reached; add "confirm"
 .challenge hardcore        shows the rules; add "confirm" to take it
 .challenge ironman
 .challenge selffound
@@ -53,6 +54,47 @@ deaths there count. Duels never kill.
 The realm is told who fell, at what level, to what, and where. The record stays in the characters
 table `mod_challenges_character`, along with when each challenge was taken and when the milestone
 level was reached.
+
+## Hardcore details
+
+- **Level range**: a Hardcore character mails, trades and groups only with characters within 5
+  levels (`Challenges.Hardcore.LevelRange`), bots included, and nobody further away can mail,
+  trade or group with it. Invites and accepts are refused; a member playerbots adds directly is
+  taken out again. A member who levels out of range leaves the group; if that member leads it,
+  the members now out of range leave instead.
+- **Closed**: the auction house (window and bids) and the Dungeon Finder: no queueing, and no
+  joining a Dungeon Finder group by invite. A group with a Hardcore member can't queue either.
+  Other modules' auctions (the Black Market) close through `Challenges::IsAuctionClosed(guid)`.
+- **Experience**: never above 1x (`Challenges.Hardcore.MaxXPRate`). Modules that raise it ask
+  `Challenges::XpRateCap(guid)`: mod-individual-xp's personal rate (the DragonUI slider and `.xp`),
+  mod-forever-dungeon-xp's dungeon quest bonus and mod-guild-levels' Fast Track perk. The core's
+  experience auras (heirlooms) are held to the cap by the module itself. The character's own rate
+  setting comes back once Hardcore ends.
+- **Milestones**: reaching level 60, 70 and 80 alive is announced, and a window asks whether to
+  finish there or keep going (`Challenges.Hardcore.Milestones`). From the first milestone on,
+  `.challenge finish` also finishes it. Finishing lifts every Hardcore rule, is announced, and
+  can't be undone.
+- **Death**: the challenge ends and the character plays on as a normal character.
+- **Titles**: each comes with an achievement in Feats of Strength, and both are account-wide:
+  once a character earns one, every character of the account has it from its next login (new
+  characters and bot alts included), and it stays when the character that earned it is deleted.
+
+| Achievement | Title | For |
+|-------------|-------|-----|
+| Immortal | *Name* the Immortal | reaching 60 alive |
+| Deathless | *Name* the Deathless | reaching 70 alive |
+| Eternal | *Name* the Eternal | reaching 80 alive |
+| Ash | *Name* of the Ash | falling at level 10-19 |
+| Ember | *Name* of the Ember | falling at 20-29 |
+| Flame | *Name* of the Flame | falling at 30-39 |
+| Blaze | *Name* of the Blaze | falling at 40-49 |
+| Hellfire | *Name* of the Hellfire | falling at 50-59 |
+| Inferno | *Name* of the Inferno | falling at 60-69 |
+| Firestorm | *Name* of the Firestorm | falling at 70-79 |
+| Phoenix | *Name* of the Phoenix | falling at 80 |
+
+A milestone title is earned on reaching the level, so playing on risks nothing already earned.
+The achievements and titles need rows in the client's spell patch; see **Client patch** below.
 
 ## Iron Man details
 
@@ -121,7 +163,12 @@ See `conf/mod_challenges.conf.dist`. Every option has a comment.
 | `Challenges.Enable` | `1` | Master switch |
 | `Challenges.<Name>.Enable` | `1` | Each challenge on or off (`Hardcore`, `IronMan`, `SelfFound`, `SelfCrafted`, `SlowXP`, `QuestXPOnly`, `ItemQuality`) |
 | `Challenges.Announce.Start` / `.Death` / `.Milestone` | `1` | Realm-wide announcements |
-| `Challenges.MilestoneLevel` | `60` | Level that counts as beating a challenge (announced; it keeps running) |
+| `Challenges.MilestoneLevel` | `60` | Level that counts as beating a challenge other than Hardcore (announced; it keeps running) |
+| `Challenges.Hardcore.Milestones` | `"60 70 80"` | Hardcore milestones; from the first one it can be finished |
+| `Challenges.Hardcore.LevelRange` | `5` | Hardcore mails, trades and groups only this close in level |
+| `Challenges.Hardcore.AllowAuctionHouse` / `.AllowDungeonFinder` | `0` | Whether Hardcore may use them |
+| `Challenges.Hardcore.MaxXPRate` | `1` | Highest experience multiplier for Hardcore |
+| `Challenges.Hardcore.Rewards` | `1` | Hardcore's account-wide achievements and titles |
 | `Challenges.LoginReminder` | `1` | Remind challengers at login |
 | `Challenges.FirstLoginWindow` | `1` | Offer the challenges in a window on a new character's first login |
 | `Challenges.BattlegroundDeathsCount` | `0` | Whether battleground and arena deaths end Hardcore and Iron Man |
@@ -136,9 +183,11 @@ See `conf/mod_challenges.conf.dist`. Every option has a comment.
 
 - AzerothCore WotLK (3.3.5a), a recent master: the module uses the PlayerScript hooks for
   learning spells and talents, trainer spell states, trade items and the first login.
-- No client patch and no addon.
+- No addon. Hardcore's achievements and titles need rows in the client's spell patch (below);
+  everything else works without a client patch.
 - Optional: modules that share items across an account can keep Self-Found characters out
-  through `src/ChallengesApi.h` (see above).
+  through `src/ChallengesApi.h` (see above), and modules with an auction or an experience bonus
+  can apply Hardcore's rules through it.
 
 ## Installation
 
@@ -149,10 +198,27 @@ git clone https://github.com/buildthehomelab/wow-mod-challenges.git mod-challeng
 
 Then re-run CMake and rebuild the worldserver. Clone into the `mod-challenges` folder: the loader
 symbol comes from the folder name. The SQL in `data/sql` is applied by the AzerothCore updater
-(`db-world` and `db-characters`). No client patch is needed.
+(`db-world` and `db-characters`).
 
-IDs used: gameobject entry, spawn guids, npc_text and the runtime gossip menu id 9503800-9503899
-(the module uses 9503800-9503808).
+IDs used: gameobject entry, spawn guids, npc_text and the runtime gossip menu ids 9503800-9503899
+(the module uses 9503800-9503808); achievements 9260-9270 (9260-9299 reserved); CharTitles
+178-188 with title bits 143-153.
+
+## Client patch
+
+Hardcore's achievements and titles are rows in Achievement.dbc and CharTitles.dbc. Without them
+the client shows nothing for them. `tools/build_patch.py` adds them to the realm's spell patch
+and writes `data/sql/db-world/mod_challenges_world_rewards.sql` from the same table:
+
+```
+python3 tools/build_patch.py --patch patch-z80-spells-and-items.MPQ --client /path/to/WoW \
+    --out patch-z80-spells-and-items-new.MPQ --sql data/sql/db-world/mod_challenges_world_rewards.sql
+```
+
+It keeps every other file of the patch as it is and every row in its place; new rows go at the
+end. `--client` is only needed the first time, when the patch has no CharTitles.dbc yet. It needs
+[StormLib](https://github.com/ladislav-zezula/StormLib) (`STORMLIB`, default
+`/usr/local/lib/libstorm.dylib`). Running it again on its own output changes nothing.
 
 To remove the module, run the files in `data/sql/uninstall`. The characters file drops the
 challenge records.

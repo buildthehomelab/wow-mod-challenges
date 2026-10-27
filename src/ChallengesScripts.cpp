@@ -5,6 +5,7 @@
  */
 
 #include "Challenges.h"
+#include "CharacterCache.h"
 #include "Chat.h"
 #include "CommandScript.h"
 #include "GameObject.h"
@@ -31,11 +32,14 @@ namespace Challenges
             SENDER_TAKE,
             SENDER_RULES,
             SENDER_CLOSE,
+            SENDER_FINISH,
         };
 
         // How long the first-login window waits for an intro cinematic to end before it opens anyway.
         constexpr Milliseconds FIRST_LOGIN_DELAY = 2s;
         constexpr uint32 FIRST_LOGIN_TRIES = 90;
+        // How long after the level-up (or the login) the milestone window opens.
+        constexpr Milliseconds MILESTONE_DELAY = 3s;
 
         bool IronMan(Player const* player)
         {
@@ -55,6 +59,33 @@ namespace Challenges
         void NotifySolo(Player* player)
         {
             NotifyRule(player, "Your challenge allows no groups.");
+        }
+
+        bool IsRealPlayer(Player const* player)
+        {
+            return player->GetSession() && !player->GetSession()->IsSocketClosed();
+        }
+
+        // Asks a character that reached a Hardcore milestone whether to finish there.
+        void ShowMilestoneMenu(Player* player)
+        {
+            ClearGossipMenuFor(player);
+            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Finish Hardcore here. (The rules lift; your titles stay.)", SENDER_FINISH, 0,
+                "Finish the Hardcore challenge? This can't be undone.", 0, false);
+            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Keep going. (You can finish later with .challenge finish.)", SENDER_CLOSE, 0);
+            player->PlayerTalkClass->GetGossipMenu().SetMenuId(MENU_MILESTONE);
+            SendGossipMenuFor(player, TEXT_MILESTONE, player->GetGUID());
+        }
+
+        void ScheduleMilestoneMenu(Player* player)
+        {
+            if (!IsRealPlayer(player))
+                return;
+            player->m_Events.AddEventAtOffset([player]()
+            {
+                if (player->IsInWorld() && player->GetSession() && CanFinish(player).empty())
+                    ShowMilestoneMenu(player);
+            }, MILESTONE_DELAY);
         }
 
         bool CanStartAny(Player* player)
@@ -156,6 +187,7 @@ namespace Challenges
             PLAYERHOOK_ON_GOSSIP_SELECT,
             PLAYERHOOK_ON_LEVEL_CHANGED,
             PLAYERHOOK_ON_DELETE_FROM_DB,
+            PLAYERHOOK_ON_LOAD_FROM_DB,
             PLAYERHOOK_ON_MAP_CHANGED,
             PLAYERHOOK_ON_GIVE_EXP,
             PLAYERHOOK_CAN_EQUIP_ITEM,
@@ -181,6 +213,14 @@ namespace Challenges
         void OnPlayerLogin(Player* player) override
         {
             HandleLogin(player);
+            if (HandleHardcoreLevel(player))
+                ScheduleMilestoneMenu(player);
+        }
+
+        // Before the player is in the world: the account's Hardcore achievements come along quietly.
+        void OnPlayerLoadFromDB(Player* player) override
+        {
+            HandleLoad(player);
         }
 
         // A new character gets the challenges offered as it first enters the world. Bots (sessions
@@ -197,12 +237,31 @@ namespace Challenges
         {
             if (menuId == MENU_FIRST_LOGIN)
                 SelectMenu(player, player->GetGUID(), TEXT_FIRST_LOGIN, sender, action);
+            else if (menuId == MENU_MILESTONE)
+            {
+                CloseGossipMenuFor(player);
+                if (sender != SENDER_FINISH)
+                    return;
+                std::string const why = CanFinish(player);
+                if (why.empty())
+                    Finish(player);
+                else
+                    ChatHandler(player->GetSession()).SendSysMessage(why);
+            }
         }
 
         void OnPlayerLevelChanged(Player* player, uint8 /*oldLevel*/) override
         {
             HandleLevel(player);
+            if (HandleHardcoreLevel(player))
+                ScheduleMilestoneMenu(player);
             EnforceIronMan(player);
+
+            // A level-up can open a gap to a Hardcore member of the group.
+            if (Group* group = player->GetGroup())
+                QueueGroupCheck(group, player->GetGUID());
+            if (Group* group = player->GetOriginalGroup())
+                QueueGroupCheck(group, player->GetGUID());
         }
 
         void OnPlayerMapChanged(Player* player) override
@@ -283,6 +342,16 @@ namespace Challenges
                 NotifyRule(player, "That player is Self-Found and can't trade.");
                 return false;
             }
+            if (target)
+            {
+                std::string const rule = LevelRule(player->GetGUID().GetCounter(), player->GetLevel(), target->GetGUID().GetCounter(),
+                    target->GetLevel());
+                if (!rule.empty())
+                {
+                    NotifyRule(player, rule.c_str());
+                    return false;
+                }
+            }
             return true;
         }
 
@@ -309,13 +378,20 @@ namespace Challenges
                 NotifyRule(player, "That character is Self-Found and can't receive mail.");
                 return false;
             }
+            std::string const rule = LevelRule(player->GetGUID().GetCounter(), player->GetLevel(), receiverGuid.GetCounter(),
+                sCharacterCache->GetCharacterLevelByGuid(receiverGuid));
+            if (!rule.empty())
+            {
+                NotifyRule(player, rule.c_str());
+                return false;
+            }
             return true;
         }
 
         // Also asked for every listing an auction browser shows, so it tells the player nothing.
         bool OnPlayerCanPlaceAuctionBid(Player* player, AuctionEntry* /*auction*/) override
         {
-            return !SelfFound(player);
+            return !AuctionsClosed(player);
         }
 
         bool OnPlayerCanGroupInvite(Player* player, std::string& memberName) override
@@ -331,23 +407,78 @@ namespace Challenges
                 NotifyRule(player, "That player's challenge allows no groups.");
                 return false;
             }
+            if (target)
+            {
+                // The newcomer must be in range of everyone already in the group. In a battleground the
+                // invite goes to the original group.
+                Group* group = player->GetGroup();
+                if (group && group->isBGGroup())
+                    group = player->GetOriginalGroup();
+                ObjectGuid::LowType const guid = target->GetGUID().GetCounter();
+                std::string const rule = group ? GroupLevelRule(group, guid, target->GetLevel()) :
+                    LevelRule(player->GetGUID().GetCounter(), player->GetLevel(), guid, target->GetLevel());
+                if (!rule.empty())
+                {
+                    NotifyRule(player, rule.c_str());
+                    return false;
+                }
+                // A Dungeon Finder group stays a Dungeon Finder group, so Hardcore can't join it either.
+                if (group && group->isLFGGroup() && !GetConfig().hardcoreDungeonFinder &&
+                    (Has(player, CHALLENGE_HARDCORE) || Has(target, CHALLENGE_HARDCORE)))
+                {
+                    NotifyRule(player, "Hardcore: no Dungeon Finder groups.");
+                    return false;
+                }
+            }
             return true;
         }
 
-        bool OnPlayerCanGroupAccept(Player* player, Group* /*group*/) override
+        bool OnPlayerCanGroupAccept(Player* player, Group* group) override
         {
-            if (!MustPlaySolo(player))
+            if (MustPlaySolo(player))
+            {
+                NotifySolo(player);
+                return false;
+            }
+            if (group->isLFGGroup() && !GetConfig().hardcoreDungeonFinder &&
+                (Has(player, CHALLENGE_HARDCORE) || GroupHasHardcore(group)))
+            {
+                NotifyRule(player, "Hardcore: no Dungeon Finder groups.");
+                return false;
+            }
+            std::string rule = GroupLevelRule(group, player->GetGUID().GetCounter(), player->GetLevel());
+            // A group made by this accept has no members yet: only its leader so far.
+            if (rule.empty() && !group->IsCreated())
+            {
+                ObjectGuid const leader = group->GetLeaderGUID();
+                rule = LevelRule(player->GetGUID().GetCounter(), player->GetLevel(), leader.GetCounter(),
+                    sCharacterCache->GetCharacterLevelByGuid(leader));
+            }
+            if (rule.empty())
                 return true;
-            NotifySolo(player);
+            NotifyRule(player, rule.c_str());
             return false;
         }
 
         bool OnPlayerCanJoinLfg(Player* player, uint8 /*roles*/, std::set<uint32>& /*dungeons*/, std::string const& /*comment*/) override
         {
-            if (!MustPlaySolo(player))
-                return true;
-            NotifySolo(player);
-            return false;
+            if (MustPlaySolo(player))
+            {
+                NotifySolo(player);
+                return false;
+            }
+            // The leader queues the whole group, so every member counts.
+            if (!GetConfig().hardcoreDungeonFinder && Has(player, CHALLENGE_HARDCORE))
+            {
+                NotifyRule(player, "Hardcore: no Dungeon Finder.");
+                return false;
+            }
+            if (!GetConfig().hardcoreDungeonFinder && GroupHasHardcore(player->GetGroup()))
+            {
+                NotifyRule(player, "Your group has a Hardcore member, and Hardcore has no Dungeon Finder.");
+                return false;
+            }
+            return true;
         }
     };
 
@@ -365,7 +496,7 @@ namespace Challenges
         }
     };
 
-    // Self-Found: the auction house window and the guild bank stay shut.
+    // Self-Found and Hardcore: the auction house window stays shut.
     class ChallengesMiscScript : public MiscScript
     {
     public:
@@ -376,9 +507,9 @@ namespace Challenges
         bool CanSendAuctionHello(WorldSession const* session, ObjectGuid /*guid*/, Creature* /*creature*/) override
         {
             Player* player = session->GetPlayer();
-            if (!player || !SelfFound(player))
+            if (!player || !AuctionsClosed(player))
                 return true;
-            NotifyRule(player, "Self-Found: no auction house.");
+            NotifyRule(player, SelfFound(player) ? "Self-Found: no auction house." : "Hardcore: no auction house.");
             return false;
         }
     };
@@ -420,9 +551,9 @@ namespace Challenges
             GROUPHOOK_ON_ADD_MEMBER
         }) { }
 
-        void OnAddMember(Group* group, ObjectGuid /*guid*/) override
+        void OnAddMember(Group* group, ObjectGuid guid) override
         {
-            QueueGroupCheck(group);
+            QueueGroupCheck(group, guid);
         }
     };
 
@@ -495,6 +626,7 @@ namespace Challenges
             static ChatCommandTable subCommands =
             {
                 { "status",      HandleStatusCommand,                          SEC_PLAYER, Console::No },
+                { "finish",      HandleFinishCommand,                          SEC_PLAYER, Console::No },
                 { "hardcore",    HandleTakeCommand<CHALLENGE_HARDCORE>,        SEC_PLAYER, Console::No },
                 { "ironman",     HandleTakeCommand<CHALLENGE_IRONMAN>,         SEC_PLAYER, Console::No },
                 { "selffound",   HandleTakeCommand<CHALLENGE_SELF_FOUND>,      SEC_PLAYER, Console::No },
@@ -521,6 +653,27 @@ namespace Challenges
             if (target != handler->GetPlayer())
                 handler->PSendSysMessage("Challenges of {}:", target->GetName());
             SendStatus(handler, target);
+            return true;
+        }
+
+        static bool HandleFinishCommand(ChatHandler* handler, Optional<std::string> confirm)
+        {
+            Player* player = handler->GetPlayer();
+            std::string const why = CanFinish(player);
+            if (!why.empty())
+            {
+                handler->SendErrorMessage(why, false);
+                return false;
+            }
+
+            if (!confirm || *confirm != "confirm")
+            {
+                handler->SendSysMessage("Finishing Hardcore lifts its rules; your titles stay. This can't be undone.");
+                handler->SendSysMessage("Type .challenge finish confirm to finish it.");
+                return true;
+            }
+
+            Finish(player);
             return true;
         }
 

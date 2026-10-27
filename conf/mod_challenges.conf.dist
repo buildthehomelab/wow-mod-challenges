@@ -52,10 +52,10 @@ Challenges.Announce.Milestone = 1
 
 #
 #    Challenges.MilestoneLevel
-#        Description: Level that counts as beating the challenge. It is announced and recorded
-#                     (milestone_at); the challenge keeps running after it. 0 turns it off. It is
-#                     the same level for every class, so Death Knights (who start at 55) reach it
-#                     sooner.
+#        Description: Level that counts as beating a challenge other than Hardcore (which has
+#                     Challenges.Hardcore.Milestones). It is announced and recorded (milestone_at);
+#                     the challenge keeps running after it. 0 turns it off. It is the same level
+#                     for every class, so Death Knights (who start at 55) reach it sooner.
 #        Default:     60
 
 Challenges.MilestoneLevel = 60
@@ -82,6 +82,61 @@ Challenges.FirstLoginWindow = 1
 #        Default:     0 - battleground and arena deaths don't count
 
 Challenges.BattlegroundDeathsCount = 0
+
+#
+#    Challenges.Hardcore.Milestones
+#        Description: Space-separated levels that count as milestones for Hardcore. Each one is
+#                     announced when a Hardcore character reaches it alive, and a window then asks
+#                     whether to finish the challenge there or keep going. From the first one on,
+#                     .challenge finish finishes it: the rules lift and the titles stay. Empty: no
+#                     milestones, and Hardcore can't be finished.
+#        Default:     "60 70 80"
+
+Challenges.Hardcore.Milestones = "60 70 80"
+
+#
+#    Challenges.Hardcore.LevelRange
+#        Description: A Hardcore character mails, trades and groups only with characters (bots
+#                     included) at most this many levels away. It works both ways: nobody further
+#                     away can mail, trade or group with it either. A group member who levels out
+#                     of range leaves the group, or, if they lead it, the members now out of range
+#                     do. 0 turns the rule off.
+#        Default:     5
+
+Challenges.Hardcore.LevelRange = 5
+
+#
+#    Challenges.Hardcore.AllowAuctionHouse
+#    Challenges.Hardcore.AllowDungeonFinder
+#        Description: Whether a Hardcore character may use the auction house (and auctions other
+#                     modules run through ChallengesApi.h, such as the Black Market) and the
+#                     Dungeon Finder.
+#        Default:     0
+
+Challenges.Hardcore.AllowAuctionHouse = 0
+Challenges.Hardcore.AllowDungeonFinder = 0
+
+#
+#    Challenges.Hardcore.MaxXPRate
+#        Description: The highest experience multiplier a Hardcore character may have. Modules
+#                     that raise experience (a personal XP rate, dungeon quest bonuses, guild perks)
+#                     ask for it through ChallengesApi.h. 0: no cap.
+#        Default:     1
+
+Challenges.Hardcore.MaxXPRate = 1
+
+#
+#    Challenges.Hardcore.Rewards
+#        Description: Account-wide achievements, each with a title, for Hardcore: the Immortal,
+#                     the Deathless and the Eternal for reaching 60, 70 and 80 alive, and one for
+#                     the level band a death from level 10 on falls in (of the Ash 10-19, Ember,
+#                     Flame, Blaze, Hellfire, Inferno, Firestorm 70-79, Phoenix 80). Every
+#                     character of the account gets what the account has earned as it loads. Needs
+#                     the module's rows in the client patch. 0: none are given, and characters keep
+#                     the ones they have.
+#        Default:     1
+
+Challenges.Hardcore.Rewards = 1
 
 #
 #    Challenges.IronMan.AllowGroups
