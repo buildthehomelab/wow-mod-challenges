@@ -5,6 +5,9 @@
  * while it is still at its starting level. Once taken, a challenge can't be put down.
  *
  *  - Hardcore: one life. The first death ends it and is announced; the character then plays on.
+ *    While it runs: mail, trade and groups only within a few levels, no auction house, no Dungeon
+ *    Finder, no experience above 1x. Reaching 60, 70 and 80 alive are milestones; from the first
+ *    one on the character may finish the challenge, which lifts the rules.
  *  - Iron Man: the classic ruleset. Grey and white gear only, no talents, no professions, no
  *    enchants, no potions, elixirs, flasks, scrolls or buff food. A death ends it like Hardcore.
  *  - Self-Found: everything comes from the character itself. No trade, auction house, guild bank,
@@ -17,6 +20,10 @@
  * Only Hardcore and Iron Man end with a death; the others last for the character's life. Most can
  * be combined. The challenges taken and how they ended are kept in the characters table
  * mod_challenges_character.
+ *
+ * Hardcore earns account-wide achievements, each with a title: one for every milestone reached
+ * alive, and one for the level band a death at level 10 or higher ends it in. The account keeps
+ * them in mod_challenges_account_reward and every character of it is given them as it loads.
  *
  * Released under the MIT License.
  */
@@ -45,6 +52,8 @@ namespace Challenges
     constexpr uint32 TEXT_RULES = 9503801;
     constexpr uint32 TEXT_FIRST_LOGIN = 9503802;
     constexpr uint32 MENU_FIRST_LOGIN = 9503800;  // runtime gossip menu id of the first-login window
+    constexpr uint32 TEXT_MILESTONE = 9503803;
+    constexpr uint32 MENU_MILESTONE = 9503801;    // runtime gossip menu id of the milestone window
 
     // Bits, so a character can carry more than one. The values are stored in the database.
     enum Challenge : uint8
@@ -74,6 +83,12 @@ namespace Challenges
         bool loginReminder = true;
         bool firstLoginWindow = true;
         uint32 milestoneLevel = 60;
+        std::vector<uint32> hardcoreMilestones;  // ascending
+        uint32 hardcoreLevelRange = 5;           // 0 = no level rule
+        bool hardcoreAuctionHouse = false;
+        bool hardcoreDungeonFinder = false;
+        float hardcoreMaxXpRate = 1.0f;          // 0 = no cap
+        bool hardcoreRewards = true;
         bool battlegroundDeaths = false;
         bool ironManGroups = true;
         bool ironManDeathKnights = false;
@@ -104,21 +119,48 @@ namespace Challenges
     bool MustPlaySolo(ObjectGuid::LowType guid);
     // Self-Found by character guid, online or not. Safe from any thread.
     bool IsSelfFound(ObjectGuid::LowType guid);
+    // Whether the challenges keep the character away from every auction house (Self-Found,
+    // Hardcore). The guid form is safe from any thread.
+    bool AuctionsClosed(Player const* player);
+    bool IsAuctionClosed(ObjectGuid::LowType guid);
+    // The highest experience multiplier the character's challenges allow; 0 when any is fine.
+    // Safe from any thread.
+    float XpRateCap(ObjectGuid::LowType guid);
+
+    // Hardcore's level rule. Why two characters may not mail, trade or group, by guid and level
+    // (online or not); empty when they may. Safe from any thread.
+    std::string LevelRule(ObjectGuid::LowType a, uint8 levelA, ObjectGuid::LowType b, uint8 levelB);
+    // The same for a character joining a group: checked against every member.
+    std::string GroupLevelRule(Group const* group, ObjectGuid::LowType guid, uint8 level);
+    bool InLevelRange(ObjectGuid::LowType a, uint8 levelA, ObjectGuid::LowType b, uint8 levelB);
+    // Whether any member of the group runs Hardcore. Safe from any thread.
+    bool GroupHasHardcore(Group const* group);
 
     // Why the player can't take the challenge right now; empty when they can.
     std::string CanStart(Player* player, Challenge challenge);
     void Start(Player* player, Challenge challenge);
+    // Finishing Hardcore once a milestone is reached: the rules lift, the rewards stay.
+    std::string CanFinish(Player* player);
+    void Finish(Player* player);
 
     void HandleDeath(Player* player, Unit* killer);
     void HandleLevel(Player* player);
+    // Hardcore milestones reached alive (a level-up, or a login after a level set offline).
+    // Returns the milestone newly reached, 0 when none.
+    uint8 HandleHardcoreLevel(Player* player);
     void HandleLogin(Player* player);
+    // While the player loads: gives them the account's achievements quietly.
+    void HandleLoad(Player* player);
     void HandleDelete(CharacterDatabaseTransaction trans, ObjectGuid::LowType guid);
     void HandleXP(Player* player, uint32& amount, Unit* victim, uint8 source);
     void SendStatus(ChatHandler* handler, Player* player);
 
     // Groups that a member who must play solo was added to without an invite (playerbots adds
     // its bots straight to the group). Queued from any thread, settled on the world thread.
-    void QueueGroupCheck(Group* group);
+    // With a subject (a member that just joined, levelled or logged in), Hardcore's level rule is
+    // checked around it too: the subject leaves the group, or, when it leads the group, the
+    // members it is out of range of do.
+    void QueueGroupCheck(Group* group, ObjectGuid subject = ObjectGuid::Empty);
     void CheckQueuedGroups();
 
     // Gear and item rules.

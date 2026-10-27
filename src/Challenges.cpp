@@ -4,13 +4,15 @@
  * Every row of mod_challenges_character is loaded at startup (one per character and challenge,
  * so the table stays small) and kept in a locked map. A player copies their own entry into
  * Player::CustomData the first time a hook asks, so the hooks that run for every player (bots
- * included) never take the lock. Writes go to the database asynchronously.
+ * included) never take the lock. Writes go to the database asynchronously. The account-wide
+ * Hardcore achievements (mod_challenges_account_reward) are loaded the same way, per account.
  *
  * Released under the MIT License.
  */
 
 #include "Challenges.h"
 #include "ChallengesApi.h"
+#include "CharacterCache.h"
 #include "Chat.h"
 #include "Config.h"
 #include "DatabaseEnv.h"
@@ -34,7 +36,9 @@
 #include "StringConvert.h"
 #include "Tokenize.h"
 #include "World.h"
+#include "WorldSession.h"
 #include <algorithm>
+#include <cmath>
 #include <iterator>
 #include <mutex>
 #include <shared_mutex>
@@ -95,6 +99,34 @@ namespace Challenges
         constexpr uint32 RUNE_ENCHANTS[] = { 3365, 3366, 3367, 3368, 3369, 3370, 3594, 3595, 3847, 3883 };
 
         constexpr uint8 GEAR_CHALLENGES = CHALLENGE_IRONMAN | CHALLENGE_SELF_CRAFTED | CHALLENGE_ITEM_QUALITY;
+
+        // Hardcore's account-wide achievements (9260-9270), each with a title (CharTitles 178-188)
+        // through achievement_reward. Their rows are in the world SQL and the client patch.
+        struct Reward
+        {
+            uint32 achievement;
+            uint8 minLevel;  // reached alive, or the lowest level of a death's band
+            uint8 maxLevel;
+        };
+
+        constexpr Reward SURVIVAL_REWARDS[] =
+        {
+            { 9260, 60, 60 },  // the Immortal
+            { 9261, 70, 70 },  // the Deathless
+            { 9262, 80, 80 },  // the Eternal
+        };
+
+        constexpr Reward DEATH_REWARDS[] =
+        {
+            { 9263, 10, 19 },   // of the Ash
+            { 9264, 20, 29 },   // of the Ember
+            { 9265, 30, 39 },   // of the Flame
+            { 9266, 40, 49 },   // of the Blaze
+            { 9267, 50, 59 },   // of the Hellfire
+            { 9268, 60, 69 },   // of the Inferno
+            { 9269, 70, 79 },   // of the Firestorm
+            { 9270, 80, 255 },  // of the Phoenix
+        };
         constexpr time_t NOTICE_INTERVAL = 5;
         constexpr uint8 LEARN_DEPTH = 3;
 
@@ -102,7 +134,9 @@ namespace Challenges
         {
             uint8 active = 0;     // taken and still running
             uint8 ended = 0;      // taken and ended by a death
+            uint8 finished = 0;   // taken and finished (Hardcore, after a milestone)
             uint8 milestone = 0;  // reached the milestone level while running
+            uint8 hardcoreMilestone = 0;  // the highest Hardcore milestone level reached alive
         };
 
         // The player's own copy of their Entry. Only touched from the player's map thread.
@@ -118,9 +152,16 @@ namespace Challenges
         std::shared_mutex lock;
         std::unordered_map<ObjectGuid::LowType, Entry> entries;
         std::unordered_set<uint32> questStartItems;  // filled at startup, read-only after
+        std::unordered_map<uint32, std::unordered_set<uint32>> accountRewards;  // account -> achievements, under lock
+
+        struct GroupCheck
+        {
+            ObjectGuid group;
+            ObjectGuid subject;  // checked for Hardcore's level rule; empty for the solo rule only
+        };
 
         std::mutex groupLock;
-        std::vector<ObjectGuid> pendingGroups;
+        std::vector<GroupCheck> pendingGroups;
 
         PlayerState& State(Player const* player)
         {
@@ -153,6 +194,14 @@ namespace Challenges
             return config.enabled ? config.allowed : 0;
         }
 
+        uint8 AuctionMask()
+        {
+            uint8 mask = CHALLENGE_SELF_FOUND;
+            if (!config.hardcoreAuctionHouse)
+                mask |= CHALLENGE_HARDCORE;
+            return mask & Enforced();
+        }
+
         uint8 SoloMask()
         {
             uint8 mask = 0;
@@ -172,6 +221,28 @@ namespace Challenges
             std::shared_lock<std::shared_mutex> guard(lock);
             auto itr = entries.find(guid);
             return itr != entries.end() ? itr->second.active & enforced : 0;
+        }
+
+        bool HardcoreByGuid(ObjectGuid::LowType guid)
+        {
+            return (ActiveByGuid(guid) & CHALLENGE_HARDCORE) != 0;
+        }
+
+        // The character cache follows every level-up, and knows characters that are offline.
+        uint8 CachedLevel(ObjectGuid::LowType guid)
+        {
+            return sCharacterCache->GetCharacterLevelByGuid(ObjectGuid::Create<HighGuid::Player>(guid));
+        }
+
+        bool LevelGap(uint8 a, uint8 b)
+        {
+            return config.hardcoreLevelRange && uint32(std::abs(int32(a) - int32(b))) > config.hardcoreLevelRange;
+        }
+
+        std::string RangeText()
+        {
+            return Acore::StringFormat("Hardcore: mail, trade and groups only between characters within {} levels of each "
+                "other.", config.hardcoreLevelRange);
         }
 
         LocaleConstant Locale()
@@ -313,6 +384,58 @@ namespace Challenges
             return text;
         }
 
+        // Gives the player one of Hardcore's achievements and records it for the whole account. The
+        // account's other characters get it as they next load (HandleLoad). A game master in GM
+        // mode can't earn achievements; they get it at their next load too.
+        void Grant(Player* player, uint32 achievementId)
+        {
+            if (!config.hardcoreRewards)
+                return;
+
+            AchievementEntry const* achievement = sAchievementStore.LookupEntry(achievementId);
+            if (!achievement)
+            {
+                LOG_ERROR("module", "mod-challenges: achievement {} is missing; run the module's world SQL", achievementId);
+                return;
+            }
+
+            uint32 const account = player->GetSession()->GetAccountId();
+            bool fresh;
+            {
+                std::unique_lock<std::shared_mutex> guard(lock);
+                fresh = accountRewards[account].insert(achievementId).second;
+            }
+            if (fresh)
+                CharacterDatabase.Execute("INSERT IGNORE INTO `mod_challenges_account_reward` (`account`, `achievement`, `guid`, `level`, "
+                    "`earned_at`) VALUES ({}, {}, {}, {}, {})", account, achievementId, player->GetGUID().GetCounter(),
+                    uint32(player->GetLevel()), uint32(GameTime::GetGameTime().count()));
+
+            if (!player->HasAchieved(achievementId))
+                player->CompletedAchievement(achievement);
+        }
+
+        // Every survival achievement up to the player's level, so a level set while offline, or a
+        // reward that came after the level, still counts.
+        void GrantSurvival(Player* player)
+        {
+            for (Reward const& reward : SURVIVAL_REWARDS)
+                if (player->GetLevel() >= reward.minLevel)
+                    Grant(player, reward.achievement);
+        }
+
+        void GrantDeath(Player* player)
+        {
+            uint8 const level = player->GetLevel();
+            for (Reward const& reward : DEATH_REWARDS)
+                if (level >= reward.minLevel && level <= reward.maxLevel)
+                    Grant(player, reward.achievement);
+        }
+
+        uint8 FirstMilestone()
+        {
+            return config.hardcoreMilestones.empty() ? 0 : uint8(config.hardcoreMilestones.front());
+        }
+
         uint8 StartLevel(Player const* player)
         {
             if (player->getClass() == CLASS_DEATH_KNIGHT)
@@ -374,6 +497,22 @@ namespace Challenges
         config.selfFoundMoneyAllowance = sConfigMgr->GetOption<uint32>("Challenges.SelfFound.StartMoneyAllowance", 10000);
         config.slowXpRate = std::clamp(sConfigMgr->GetOption<float>("Challenges.SlowXP.Rate", 0.5f), 0.0f, 1.0f);
 
+        config.hardcoreLevelRange = sConfigMgr->GetOption<uint32>("Challenges.Hardcore.LevelRange", 5);
+        config.hardcoreAuctionHouse = sConfigMgr->GetOption<bool>("Challenges.Hardcore.AllowAuctionHouse", false);
+        config.hardcoreDungeonFinder = sConfigMgr->GetOption<bool>("Challenges.Hardcore.AllowDungeonFinder", false);
+        config.hardcoreMaxXpRate = std::max(0.0f, sConfigMgr->GetOption<float>("Challenges.Hardcore.MaxXPRate", 1.0f));
+        config.hardcoreRewards = sConfigMgr->GetOption<bool>("Challenges.Hardcore.Rewards", true);
+
+        config.hardcoreMilestones.clear();
+        std::string const milestones = sConfigMgr->GetOption<std::string>("Challenges.Hardcore.Milestones", "60 70 80");
+        for (std::string_view token : Acore::Tokenize(milestones, ' ', false))
+            if (Optional<uint32> level = Acore::StringTo<uint32>(token))
+                if (*level > 1 && *level <= STRONG_MAX_LEVEL)
+                    config.hardcoreMilestones.push_back(*level);
+        std::sort(config.hardcoreMilestones.begin(), config.hardcoreMilestones.end());
+        config.hardcoreMilestones.erase(std::unique(config.hardcoreMilestones.begin(), config.hardcoreMilestones.end()),
+            config.hardcoreMilestones.end());
+
         config.ironManExtraSkills.clear();
         std::string const extraSkills = sConfigMgr->GetOption<std::string>("Challenges.IronMan.ExtraProfessionSkills", "");
         for (std::string_view token : Acore::Tokenize(extraSkills, ' ', false))
@@ -383,20 +522,42 @@ namespace Challenges
 
     void Load()
     {
+        // Without mod_challenges_characters_hardcore.sql the table has no milestone_level, and the query
+        // below would fail like an empty table: every challenge would read as not taken.
+        bool const milestoneColumn = CharacterDatabase.Query("SHOW COLUMNS FROM `mod_challenges_character` LIKE 'milestone_level'") != nullptr;
+        if (!milestoneColumn)
+            LOG_ERROR("server.loading", "mod-challenges: mod_challenges_character has no milestone_level column; run "
+                "data/sql/db-characters/mod_challenges_characters_hardcore.sql. Hardcore milestones are not loaded.");
+
         std::unordered_map<ObjectGuid::LowType, Entry> loaded;
-        if (QueryResult result = CharacterDatabase.Query("SELECT `guid`, `challenge`, `state`, `milestone_at` FROM `mod_challenges_character`"))
+        if (QueryResult result = CharacterDatabase.Query("SELECT `guid`, `challenge`, `state`, `milestone_at`, {} "
+            "FROM `mod_challenges_character`", milestoneColumn ? "`milestone_level`" : "0"))
         {
             do
             {
                 Field* fields = result->Fetch();
                 Entry& entry = loaded[fields[0].Get<uint32>()];
                 uint8 const challenge = fields[1].Get<uint8>();
-                if (fields[2].Get<uint8>() == 0)
-                    entry.active |= challenge;
-                else
-                    entry.ended |= challenge;
+                switch (fields[2].Get<uint8>())
+                {
+                    case 0:  entry.active |= challenge; break;
+                    case 2:  entry.finished |= challenge; break;
+                    default: entry.ended |= challenge; break;
+                }
                 if (fields[3].Get<uint32>())
                     entry.milestone |= challenge;
+                if (challenge == CHALLENGE_HARDCORE)
+                    entry.hardcoreMilestone = fields[4].Get<uint8>();
+            } while (result->NextRow());
+        }
+
+        std::unordered_map<uint32, std::unordered_set<uint32>> rewards;
+        if (QueryResult result = CharacterDatabase.Query("SELECT `account`, `achievement` FROM `mod_challenges_account_reward`"))
+        {
+            do
+            {
+                Field* fields = result->Fetch();
+                rewards[fields[0].Get<uint32>()].insert(fields[1].Get<uint32>());
             } while (result->NextRow());
         }
 
@@ -409,7 +570,9 @@ namespace Challenges
 
         std::unique_lock<std::shared_mutex> guard(lock);
         entries = std::move(loaded);
-        LOG_INFO("server.loading", ">> mod-challenges: {} characters with a challenge", entries.size());
+        accountRewards = std::move(rewards);
+        LOG_INFO("server.loading", ">> mod-challenges: {} characters with a challenge, {} accounts with Hardcore achievements",
+            entries.size(), accountRewards.size());
     }
 
     char const* Name(Challenge challenge)
@@ -429,8 +592,31 @@ namespace Challenges
         switch (challenge)
         {
             case CHALLENGE_HARDCORE:
-                return "Hardcore: you have one life. The first death ends the challenge, and the realm hears of it. "
-                    "The character then plays on as normal.";
+            {
+                std::string text = "Hardcore: you have one life. The first death ends the challenge, and the realm hears of it; "
+                    "the character then plays on as normal.";
+                if (config.hardcoreLevelRange)
+                    text += Acore::StringFormat(" You mail, trade and group only with characters within {} levels of you, bots "
+                        "included.", config.hardcoreLevelRange);
+                if (!config.hardcoreAuctionHouse)
+                    text += " No auction house.";
+                if (!config.hardcoreDungeonFinder)
+                    text += " No Dungeon Finder.";
+                if (config.hardcoreMaxXpRate > 0.0f)
+                    text += Acore::StringFormat(" Experience at no more than {}x.", config.hardcoreMaxXpRate);
+                if (!config.hardcoreMilestones.empty())
+                {
+                    std::string levels;
+                    for (uint32 level : config.hardcoreMilestones)
+                        levels += (levels.empty() ? "" : ", ") + std::to_string(level);
+                    text += " Reaching level " + levels + " alive is a milestone; from the first one on you may finish the "
+                        "challenge with .challenge finish, which lifts the rules.";
+                }
+                if (config.hardcoreRewards)
+                    text += " Titles for your whole account: the Immortal, the Deathless and the Eternal for reaching 60, 70 "
+                        "and 80 alive, and one for how far you climbed if you fall at level 10 or higher.";
+                return text;
+            }
             case CHALLENGE_IRONMAN:
                 return "Iron Man: grey and white gear only, unenchanted. No talents or professions. No potions, elixirs, "
                     "flasks, scrolls or buff food. A death ends the challenge.";
@@ -502,6 +688,59 @@ namespace Challenges
         return (ActiveByGuid(guid) & CHALLENGE_SELF_FOUND) != 0;
     }
 
+    bool AuctionsClosed(Player const* player)
+    {
+        return (Active(player) & AuctionMask()) != 0;
+    }
+
+    bool IsAuctionClosed(ObjectGuid::LowType guid)
+    {
+        return (ActiveByGuid(guid) & AuctionMask()) != 0;
+    }
+
+    float XpRateCap(ObjectGuid::LowType guid)
+    {
+        return config.hardcoreMaxXpRate > 0.0f && HardcoreByGuid(guid) ? config.hardcoreMaxXpRate : 0.0f;
+    }
+
+    std::string LevelRule(ObjectGuid::LowType a, uint8 levelA, ObjectGuid::LowType b, uint8 levelB)
+    {
+        if (a == b || !LevelGap(levelA, levelB))
+            return "";
+        if (!HardcoreByGuid(a) && !HardcoreByGuid(b))
+            return "";
+        return RangeText();
+    }
+
+    bool InLevelRange(ObjectGuid::LowType a, uint8 levelA, ObjectGuid::LowType b, uint8 levelB)
+    {
+        return LevelRule(a, levelA, b, levelB).empty();
+    }
+
+    bool GroupHasHardcore(Group const* group)
+    {
+        if (!group)
+            return false;
+        for (Group::MemberSlot const& member : group->GetMemberSlots())
+            if (HardcoreByGuid(member.guid.GetCounter()))
+                return true;
+        return false;
+    }
+
+    std::string GroupLevelRule(Group const* group, ObjectGuid::LowType guid, uint8 level)
+    {
+        if (!group || group->isBGGroup() || group->isBFGroup())
+            return "";
+        for (Group::MemberSlot const& member : group->GetMemberSlots())
+        {
+            ObjectGuid::LowType const other = member.guid.GetCounter();
+            std::string rule = LevelRule(guid, level, other, CachedLevel(other));
+            if (!rule.empty())
+                return rule;
+        }
+        return "";
+    }
+
     std::string CanStart(Player* player, Challenge challenge)
     {
         if (!IsAllowed(challenge))
@@ -512,6 +751,8 @@ namespace Challenges
             return Acore::StringFormat("You have already taken the {} challenge.", Name(challenge));
         if (entry.ended & challenge)
             return Acore::StringFormat("Your {} challenge has ended. It can't be taken again on this character.", Name(challenge));
+        if (entry.finished & challenge)
+            return Acore::StringFormat("You have finished the {} challenge. It can't be taken again on this character.", Name(challenge));
         if (uint8 const clash = entry.active & Excludes(challenge))
             return Acore::StringFormat("{} can't be combined with {}.", Name(challenge), Names(clash));
 
@@ -528,6 +769,21 @@ namespace Challenges
 
         switch (challenge)
         {
+            case CHALLENGE_HARDCORE:
+            {
+                std::string const rule = GroupLevelRule(player->GetGroup(), player->GetGUID().GetCounter(), player->GetLevel());
+                if (!rule.empty())
+                    return "Leave your group first. " + rule;
+                if (!config.hardcoreDungeonFinder && sLFGMgr->GetState(player->GetGUID()) != lfg::LFG_STATE_NONE)
+                    return "Leave the Dungeon Finder first: Hardcore has none.";
+                // What another character sent along would come in from outside the level range.
+                for (Mail const* mail : player->GetMails())
+                    if (mail->messageType == MAIL_NORMAL && mail->sender != player->GetGUID().GetCounter() &&
+                        (mail->HasItems() || mail->money) && LevelGap(player->GetLevel(), CachedLevel(mail->sender)))
+                        return Acore::StringFormat("Empty your mailbox of what characters more than {} levels away sent you first.",
+                            config.hardcoreLevelRange);
+                break;
+            }
             case CHALLENGE_IRONMAN:
             {
                 if (player->getClass() == CLASS_DEATH_KNIGHT && !config.ironManDeathKnights)
@@ -634,6 +890,42 @@ namespace Challenges
             Announce(Tag(challenge) + player->GetName() + " has taken the " + Name(challenge) + " challenge. Good luck!");
     }
 
+    std::string CanFinish(Player* player)
+    {
+        if (!Has(player, CHALLENGE_HARDCORE))
+            return "You have no Hardcore challenge running.";
+        uint8 const first = FirstMilestone();
+        if (!first)
+            return "Hardcore can't be finished on this realm.";
+        if (player->GetLevel() < first)
+            return Acore::StringFormat("Hardcore can be finished from level {} on.", first);
+        if (!player->IsAlive())
+            return "Hardcore can't be finished while dead.";
+        return "";
+    }
+
+    void Finish(Player* player)
+    {
+        Update(player, [](Entry& entry)
+        {
+            entry.active &= ~CHALLENGE_HARDCORE;
+            entry.finished |= CHALLENGE_HARDCORE;
+        });
+
+        CharacterDatabase.Execute("UPDATE `mod_challenges_character` SET `state` = 2, `ended_at` = {}, `end_level` = {}, `end_map` = {}, "
+            "`end_zone` = {} WHERE `guid` = {} AND `challenge` = {} AND `state` = 0", uint32(GameTime::GetGameTime().count()),
+            uint32(player->GetLevel()), player->GetMapId(), player->GetZoneId(), player->GetGUID().GetCounter(),
+            uint32(CHALLENGE_HARDCORE));
+
+        ChatHandler(player->GetSession()).SendSysMessage("|cffff4040Hardcore|r finished. Its rules are lifted, and your titles stay.");
+        if (config.announceMilestone)
+            Announce(Tag(CHALLENGE_HARDCORE) + player->GetName() + " has finished the Hardcore challenge at level " +
+                std::to_string(player->GetLevel()) + ", never having died!");
+
+        LOG_INFO("module", "mod-challenges: {} ({}) finished Hardcore at level {}", player->GetName(), player->GetGUID().GetCounter(),
+            player->GetLevel());
+    }
+
     void HandleDeath(Player* player, Unit* killer)
     {
         uint8 const mask = Active(player) & ENDS_ON_DEATH;
@@ -651,6 +943,10 @@ namespace Challenges
             else
                 killerName = killer->GetName();
         }
+
+        // While the challenge is still running, so the reward goes with this death.
+        if (mask & CHALLENGE_HARDCORE)
+            GrantDeath(player);
 
         Update(player, [mask](Entry& entry)
         {
@@ -687,7 +983,8 @@ namespace Challenges
         if (!config.milestoneLevel || player->GetLevel() < config.milestoneLevel)
             return;
 
-        uint8 const reached = Active(player) & ~State(player).entry.milestone;
+        // Hardcore has milestones of its own (HandleHardcoreLevel).
+        uint8 const reached = Active(player) & ~CHALLENGE_HARDCORE & ~State(player).entry.milestone;
         if (!reached)
             return;
 
@@ -701,25 +998,81 @@ namespace Challenges
                 ((reached & ENDS_ON_DEATH) ? " without dying!" : "!"));
     }
 
+    uint8 HandleHardcoreLevel(Player* player)
+    {
+        if (!Has(player, CHALLENGE_HARDCORE) || !player->IsAlive())
+            return 0;
+
+        GrantSurvival(player);
+
+        uint8 const done = State(player).entry.hardcoreMilestone;
+        uint8 reached = 0;
+        for (uint32 level : config.hardcoreMilestones)
+            if (level > done && level <= player->GetLevel())
+                reached = uint8(level);
+        if (!reached)
+            return 0;
+
+        Update(player, [reached](Entry& entry)
+        {
+            entry.hardcoreMilestone = reached;
+            entry.milestone |= CHALLENGE_HARDCORE;
+        });
+
+        uint32 const now = uint32(GameTime::GetGameTime().count());
+        CharacterDatabase.Execute("UPDATE `mod_challenges_character` SET `milestone_level` = {}, `milestone_at` = IF(`milestone_at` = 0, {}, "
+            "`milestone_at`) WHERE `guid` = {} AND `challenge` = {} AND `state` = 0", uint32(reached), now,
+            player->GetGUID().GetCounter(), uint32(CHALLENGE_HARDCORE));
+
+        if (config.announceMilestone)
+            Announce(Tag(CHALLENGE_HARDCORE) + player->GetName() + " has reached level " + std::to_string(reached) + " without dying!");
+
+        return reached;
+    }
+
     void HandleLogin(Player* player)
     {
         EnforceIronMan(player);
 
-        // A group from before the rule (saved across a restart, or AllowGroups switched off since).
-        // In a battleground the normal group is the original one.
-        if (MustPlaySolo(player))
-        {
-            if (Group* group = player->GetGroup())
-                QueueGroupCheck(group);
-            if (Group* group = player->GetOriginalGroup())
-                QueueGroupCheck(group);
-        }
+        // A group from before the rule (saved across a restart, or AllowGroups switched off since),
+        // or with members who levelled while this character was away. In a battleground the
+        // normal group is the original one.
+        ObjectGuid const subject = player->GetGUID();
+        if (Group* group = player->GetGroup())
+            QueueGroupCheck(group, subject);
+        if (Group* group = player->GetOriginalGroup())
+            QueueGroupCheck(group, subject);
 
         uint8 const mask = Active(player);
         if (!mask || !config.loginReminder)
             return;
         ChatHandler(player->GetSession()).SendSysMessage(Acore::StringFormat("|cffff4040{}|r on this character. "
             "Type .challenge status for the rules.", Names(mask)));
+        if ((mask & CHALLENGE_HARDCORE) && CanFinish(player).empty())
+            ChatHandler(player->GetSession()).SendSysMessage("You have reached a Hardcore milestone. Type .challenge finish to "
+                "finish the challenge, or play on for the next one.");
+    }
+
+    // The core sends no "achievement earned" while a player loads, so the account's other characters
+    // get their copies without a word to the guild or anyone near.
+    void HandleLoad(Player* player)
+    {
+        if (!config.hardcoreRewards)
+            return;
+
+        std::vector<uint32> owned;
+        {
+            std::shared_lock<std::shared_mutex> guard(lock);
+            auto itr = accountRewards.find(player->GetSession()->GetAccountId());
+            if (itr == accountRewards.end())
+                return;
+            owned.assign(itr->second.begin(), itr->second.end());
+        }
+
+        for (uint32 achievementId : owned)
+            if (!player->HasAchieved(achievementId))
+                if (AchievementEntry const* achievement = sAchievementStore.LookupEntry(achievementId))
+                    player->CompletedAchievement(achievement);
     }
 
     // Every path that removes a character for good (client delete, .character erase, the purge of
@@ -738,6 +1091,22 @@ namespace Challenges
     // from the same amount afterwards.
     void HandleXP(Player* player, uint32& amount, Unit* victim, uint8 source)
     {
+        if (!amount)
+            return;
+
+        // Hardcore's cap also covers the core's own experience auras (heirlooms), which are already
+        // in the amount: kills carry SPELL_AURA_MOD_XP_PCT, quests SPELL_AURA_MOD_XP_QUEST_PCT.
+        if (config.hardcoreMaxXpRate > 0.0f && Has(player, CHALLENGE_HARDCORE))
+        {
+            float multiplier = 1.0f;
+            if (source == PlayerXPSource::XPSOURCE_KILL)
+                multiplier = player->GetTotalAuraMultiplier(SPELL_AURA_MOD_XP_PCT);
+            else if (source == PlayerXPSource::XPSOURCE_QUEST || source == PlayerXPSource::XPSOURCE_QUEST_DF)
+                multiplier = player->GetTotalAuraMultiplier(SPELL_AURA_MOD_XP_QUEST_PCT);
+            if (multiplier > config.hardcoreMaxXpRate)
+                amount = uint32(std::lround(double(amount) * config.hardcoreMaxXpRate / multiplier));
+        }
+
         uint8 const mask = Active(player) & (CHALLENGE_SLOW_XP | CHALLENGE_QUEST_XP_ONLY);
         if (!mask || !amount)
             return;
@@ -763,10 +1132,15 @@ namespace Challenges
         {
             if ((entry.active & challenge) && !IsAllowed(challenge))
                 handler->PSendSysMessage("{}: taken, but switched off on this realm", Name(challenge));
+            else if ((entry.active & challenge) && challenge == CHALLENGE_HARDCORE && entry.hardcoreMilestone)
+                handler->PSendSysMessage("{}: |cff40ff40active|r (reached level {} alive; .challenge finish ends it)", Name(challenge),
+                    entry.hardcoreMilestone);
             else if (entry.active & challenge)
                 handler->PSendSysMessage("{}: |cff40ff40active|r{}", Name(challenge), (entry.milestone & challenge) ? " (milestone reached)" : "");
             else if (entry.ended & challenge)
                 handler->PSendSysMessage("{}: |cffff4040ended|r", Name(challenge));
+            else if (entry.finished & challenge)
+                handler->PSendSysMessage("{}: |cff40ff40finished|r", Name(challenge));
             else if (IsAllowed(challenge))
                 handler->PSendSysMessage("{}: not taken (.challenge {})", Name(challenge), Command(challenge));
         }
@@ -776,36 +1150,57 @@ namespace Challenges
                 handler->SendSysMessage(Rules(challenge));
     }
 
-    void QueueGroupCheck(Group* group)
+    void QueueGroupCheck(Group* group, ObjectGuid subject)
     {
         if (group->isBGGroup() || group->isBFGroup())
             return;
 
         bool solo = false;
+        bool hardcore = false;
         for (Group::MemberSlot const& member : group->GetMemberSlots())
-            if (MustPlaySolo(member.guid.GetCounter()))
+        {
+            ObjectGuid::LowType const guid = member.guid.GetCounter();
+            if (MustPlaySolo(guid))
                 solo = true;
-        if (!solo)
+            if (HardcoreByGuid(guid))
+                hardcore = true;
+        }
+        if (!hardcore || !config.hardcoreLevelRange)
+            subject = ObjectGuid::Empty;
+        if (!solo && !subject)
             return;
 
         std::lock_guard<std::mutex> guard(groupLock);
-        pendingGroups.push_back(group->GetGUID());
+        pendingGroups.push_back({ group->GetGUID(), subject });
     }
 
-    // World thread, while no map updates: removes everyone who must play solo from the groups queued.
+    // World thread, while no map updates: removes everyone who must play solo from the groups queued,
+    // then settles Hardcore's level rule around each subject.
     void CheckQueuedGroups()
     {
-        std::vector<ObjectGuid> groups;
+        std::vector<GroupCheck> checks;
         {
             std::lock_guard<std::mutex> guard(groupLock);
             if (pendingGroups.empty())
                 return;
-            groups.swap(pendingGroups);
+            checks.swap(pendingGroups);
         }
 
-        for (ObjectGuid const& groupGuid : groups)
+        auto takeOut = [](ObjectGuid groupGuid, ObjectGuid guid, std::string const& why)
         {
+            // Removing the second-to-last member disbands the group.
             Group* group = sGroupMgr->GetGroupByGUID(groupGuid.GetCounter());
+            if (!group || !group->IsMember(guid))
+                return false;
+            Player::RemoveFromGroup(group, guid);
+            if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
+                ChatHandler(player->GetSession()).PSendSysMessage("|cffff4040{}|r You were taken out of the group.", why);
+            return true;
+        };
+
+        for (GroupCheck const& check : checks)
+        {
+            Group* group = sGroupMgr->GetGroupByGUID(check.group.GetCounter());
             if (!group)
                 continue;
 
@@ -816,15 +1211,37 @@ namespace Challenges
 
             for (ObjectGuid const& guid : solo)
             {
-                // Removing the second-to-last member disbands the group.
-                group = sGroupMgr->GetGroupByGUID(groupGuid.GetCounter());
-                if (!group || !group->IsMember(guid))
-                    break;
-                Player::RemoveFromGroup(group, guid);
-                if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
-                    ChatHandler(player->GetSession()).PSendSysMessage("|cffff4040{}|r: you play alone, so you were taken out of the group.",
-                        Names(Active(player) & SoloMask()));
+                Player* player = ObjectAccessor::FindConnectedPlayer(guid);
+                takeOut(check.group, guid, player ? std::string(Names(Active(player) & SoloMask())) + ": you play alone." :
+                    std::string("You play alone."));
             }
+
+            group = sGroupMgr->GetGroupByGUID(check.group.GetCounter());
+            if (!check.subject || !group || !group->IsMember(check.subject))
+                continue;
+
+            // An online member's own level; the cache for the rest.
+            auto levelOf = [](ObjectGuid guid)
+            {
+                if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
+                    return player->GetLevel();
+                return CachedLevel(guid.GetCounter());
+            };
+
+            ObjectGuid::LowType const subject = check.subject.GetCounter();
+            uint8 const subjectLevel = levelOf(check.subject);
+            std::vector<ObjectGuid> outOfRange;
+            for (Group::MemberSlot const& member : group->GetMemberSlots())
+                if (!LevelRule(subject, subjectLevel, member.guid.GetCounter(), levelOf(member.guid)).empty())
+                    outOfRange.push_back(member.guid);
+            if (outOfRange.empty())
+                continue;
+
+            // The leader keeps the group; anyone else who opened the gap leaves it.
+            if (!group->IsLeader(check.subject))
+                outOfRange = { check.subject };
+            for (ObjectGuid const& guid : outOfRange)
+                takeOut(check.group, guid, RangeText());
         }
     }
 
