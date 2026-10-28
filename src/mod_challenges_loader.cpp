@@ -9,8 +9,10 @@
  */
 
 void AddChallengesScripts();
+void AddHardcoreProfessionAchievementScripts();
 
 void Addmod_challengesScripts()
 {
     AddChallengesScripts();
+    AddHardcoreProfessionAchievementScripts();
 }

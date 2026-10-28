@@ -232,3 +232,22 @@ inspired this module and its list of challenges.
 ## License
 
 Released under the MIT License.
+
+### Hardcore profession achievements
+
+While Hardcore is active, profession skill/rank achievements wait until the
+character reaches the minimum trainer level for the rank permitting that
+achievement's threshold. Account-wide profession skills, ranks and recipes remain
+available. Ordinary characters and other challenge modes retain their existing
+achievement behavior.
+
+Requirements come from the world's `trainer_spell.ReqLevel` rows at startup,
+including direct rank spells and learn-spell wrappers. Restart after changing
+trainer requirements. Missing trainer data withholds the affected rank.
+Login and level-up reconsider unawarded profession criteria, including saved
+counters from account sync. Previously awarded achievements remain awarded.
+There is no SQL migration or client patch.
+
+Run `python3 tests/test_achievement_levels.py` for focused production-policy tests
+covering rank boundaries, distinct trainer requirements, persisted deferred
+progress, and non-Hardcore behavior.
