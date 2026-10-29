@@ -163,6 +163,10 @@ namespace Challenges
         std::mutex groupLock;
         std::vector<GroupCheck> pendingGroups;
 
+        // The Evermore core's characters.challenges column, which its character list sends to the
+        // character select screen. Checked at startup; a core without it gets no writes.
+        bool selectColumn = false;
+
         PlayerState& State(Player const* player)
         {
             Player* mutablePlayer = const_cast<Player*>(player);
@@ -187,6 +191,20 @@ namespace Challenges
             change(State(player).entry);
             std::unique_lock<std::shared_mutex> guard(lock);
             change(entries[player->GetGUID().GetCounter()]);
+        }
+
+        // characters.challenges: the challenges running in the low byte, the ones a death ended in the
+        // high byte, a finished one in both (a finished Hardcore is 0x0101). Load() writes the same
+        // from the table.
+        void SaveSelectMarker(Player* player)
+        {
+            if (!selectColumn)
+                return;
+
+            Entry const& entry = State(player).entry;
+            uint32 const marker = uint32(entry.active | entry.finished) | (uint32(entry.ended | entry.finished) << 8);
+            CharacterDatabase.Execute("UPDATE `characters` SET `challenges` = {} WHERE `guid` = {}", marker,
+                player->GetGUID().GetCounter());
         }
 
         uint8 Enforced()
@@ -551,6 +569,15 @@ namespace Challenges
             } while (result->NextRow());
         }
 
+        // Every character's characters.challenges from the table, which also fills it the first time
+        // and puts right anything changed by hand (SaveSelectMarker keeps it after that).
+        selectColumn = CharacterDatabase.Query("SHOW COLUMNS FROM `characters` LIKE 'challenges'") != nullptr;
+        if (selectColumn)
+            CharacterDatabase.DirectExecute("UPDATE `characters` AS c LEFT JOIN (SELECT `guid`, "
+                "BIT_OR(IF(`state` IN (0, 2), `challenge`, 0)) | (BIT_OR(IF(`state` <> 0, `challenge`, 0)) << 8) AS `marker` "
+                "FROM `mod_challenges_character` GROUP BY `guid`) AS m ON m.`guid` = c.`guid` "
+                "SET c.`challenges` = COALESCE(m.`marker`, 0) WHERE c.`challenges` <> COALESCE(m.`marker`, 0)");
+
         std::unordered_map<uint32, std::unordered_set<uint32>> rewards;
         if (QueryResult result = CharacterDatabase.Query("SELECT `account`, `achievement` FROM `mod_challenges_account_reward`"))
         {
@@ -883,6 +910,7 @@ namespace Challenges
 
         CharacterDatabase.Execute("REPLACE INTO `mod_challenges_character` (`guid`, `challenge`, `state`, `started_at`, `start_level`) "
             "VALUES ({}, {}, 0, {}, {})", guid, uint32(challenge), uint32(GameTime::GetGameTime().count()), uint32(player->GetLevel()));
+        SaveSelectMarker(player);
 
         ChatHandler(player->GetSession()).PSendSysMessage("|cffff4040{}|r taken. {}", Name(challenge), Rules(challenge));
 
@@ -916,6 +944,7 @@ namespace Challenges
             "`end_zone` = {} WHERE `guid` = {} AND `challenge` = {} AND `state` = 0", uint32(GameTime::GetGameTime().count()),
             uint32(player->GetLevel()), player->GetMapId(), player->GetZoneId(), player->GetGUID().GetCounter(),
             uint32(CHALLENGE_HARDCORE));
+        SaveSelectMarker(player);
 
         ChatHandler(player->GetSession()).SendSysMessage("|cffff4040Hardcore|r finished. Its rules are lifted, and your titles stay.");
         if (config.announceMilestone)
@@ -960,6 +989,7 @@ namespace Challenges
             "`end_map` = {}, `end_zone` = {}, `end_killer` = '{}' WHERE `guid` = {} AND (`challenge` & {}) <> 0 AND `state` = 0",
             uint32(GameTime::GetGameTime().count()), uint32(player->GetLevel()), player->GetMapId(), player->GetZoneId(),
             killerSql, player->GetGUID().GetCounter(), uint32(mask));
+        SaveSelectMarker(player);
 
         ChatHandler(player->GetSession()).SendSysMessage(Acore::StringFormat("Your {} challenge has ended. "
             "This character plays on without it.", Names(mask)));
