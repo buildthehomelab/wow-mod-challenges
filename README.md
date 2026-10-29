@@ -188,6 +188,10 @@ See `conf/mod_challenges.conf.dist`. Every option has a comment.
 - Optional: modules that share items across an account can keep Self-Found characters out
   through `src/ChallengesApi.h` (see above), and modules with an auction or an experience bonus
   can apply Hardcore's rules through it.
+- Optional: on a core with a `characters`.`challenges` column (the Evermore core's character select
+  screen), the module keeps it set for every character: the challenges running in the low byte,
+  the ones a death ended in the high byte, a finished Hardcore as `0x0101`. It fills the column
+  from its own table at every startup. Without the column nothing is written.
 
 ## Installation
 
