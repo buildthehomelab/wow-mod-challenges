@@ -85,9 +85,8 @@ namespace Challenges
     // The challenges a death ends.
     constexpr uint16 ENDS_ON_DEATH = CHALLENGE_HARDCORE | CHALLENGE_IRONMAN;
 
-    // The challenges the character select screen knows: characters.challenges keeps seven bits for
-    // the running ones and seven for the ended ones (the core puts bit 23 of its marker, between
-    // them, to the favourite star).
+    // The challenges an older Evermore core's SMALLINT characters.challenges has room for: seven
+    // bits for the running ones and seven for the ended ones. Its INT column takes all of them.
     constexpr uint16 SELECT_MARKER_CHALLENGES = 0x7F;
 
     struct Config

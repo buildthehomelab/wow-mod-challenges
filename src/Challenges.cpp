@@ -176,8 +176,21 @@ namespace Challenges
         std::vector<GroupCheck> pendingGroups;
 
         // The Evermore core's characters.challenges column, which its character list sends to the
-        // character select screen. Checked at startup; a core without it gets no writes.
+        // character select screen. Checked at startup; a core without it gets no writes. The INT
+        // column has the running challenges in its low 16 bits and the ended ones in its high 16; the
+        // SMALLINT one of an older core a byte each, for the first seven challenges only.
         bool selectColumn = false;
+        bool selectWide = false;
+
+        uint32 SelectShift()
+        {
+            return selectWide ? 16 : 8;
+        }
+
+        uint32 SelectMask()
+        {
+            return selectWide ? 0xFFFF : SELECT_MARKER_CHALLENGES;
+        }
 
         PlayerState& State(Player const* player)
         {
@@ -205,17 +218,17 @@ namespace Challenges
             change(entries[player->GetGUID().GetCounter()]);
         }
 
-        // characters.challenges: the challenges running in the low byte, the ones a death ended in the
-        // high byte, a finished one in both (a finished Hardcore is 0x0101). Only the seven the
-        // character select screen knows. Load() writes the same from the table.
+        // characters.challenges: the challenges running in the low half, the ones a death ended in the
+        // high half, a finished one in both (a finished Hardcore is 0x00010001). Load() writes the same
+        // from the table.
         void SaveSelectMarker(Player* player)
         {
             if (!selectColumn)
                 return;
 
             Entry const& entry = State(player).entry;
-            uint32 const marker = uint32((entry.active | entry.finished) & SELECT_MARKER_CHALLENGES) |
-                (uint32((entry.ended | entry.finished) & SELECT_MARKER_CHALLENGES) << 8);
+            uint32 const marker = (uint32(entry.active | entry.finished) & SelectMask()) |
+                ((uint32(entry.ended | entry.finished) & SelectMask()) << SelectShift());
             CharacterDatabase.Execute("UPDATE `characters` SET `challenges` = {} WHERE `guid` = {}", marker,
                 player->GetGUID().GetCounter());
         }
@@ -630,12 +643,14 @@ namespace Challenges
 
         // Every character's characters.challenges from the table, which also fills it the first time
         // and puts right anything changed by hand (SaveSelectMarker keeps it after that).
-        selectColumn = CharacterDatabase.Query("SHOW COLUMNS FROM `characters` LIKE 'challenges'") != nullptr;
+        QueryResult const column = CharacterDatabase.Query("SHOW COLUMNS FROM `characters` LIKE 'challenges'");
+        selectColumn = column != nullptr;
+        selectWide = selectColumn && column->Fetch()[1].Get<std::string>().rfind("int", 0) == 0;
         if (selectColumn)
             CharacterDatabase.DirectExecute("UPDATE `characters` AS c LEFT JOIN (SELECT `guid`, "
-                "BIT_OR(IF(`state` IN (0, 2), `challenge`, 0) & {0}) | (BIT_OR(IF(`state` <> 0, `challenge`, 0) & {0}) << 8) AS `marker` "
+                "BIT_OR(IF(`state` IN (0, 2), `challenge`, 0) & {0}) | (BIT_OR(IF(`state` <> 0, `challenge`, 0) & {0}) << {1}) AS `marker` "
                 "FROM `mod_challenges_character` GROUP BY `guid`) AS m ON m.`guid` = c.`guid` "
-                "SET c.`challenges` = COALESCE(m.`marker`, 0) WHERE c.`challenges` <> COALESCE(m.`marker`, 0)", uint32(SELECT_MARKER_CHALLENGES));
+                "SET c.`challenges` = COALESCE(m.`marker`, 0) WHERE c.`challenges` <> COALESCE(m.`marker`, 0)", SelectMask(), SelectShift());
 
         std::unordered_map<uint32, std::unordered_set<uint32>> rewards;
         if (QueryResult result = CharacterDatabase.Query("SELECT `account`, `achievement` FROM `mod_challenges_account_reward`"))

@@ -250,10 +250,12 @@ See `conf/mod_challenges.conf.dist`. Every option has a comment.
   through `src/ChallengesApi.h` (see above), and modules with an auction or an experience bonus
   can apply Hardcore's rules through it.
 - Optional: on a core with a `characters`.`challenges` column (the Evermore core's character select
-  screen), the module keeps it set for every character: the challenges running in the low byte,
-  the ones a death ended in the high byte, a finished Hardcore as `0x0101`. It fills the column
-  from its own table at every startup. Without the column nothing is written. Only the first seven
-  challenges are in it (Boaring Adventure and Exhaustion are not shown there yet).
+  screen), the module keeps it set for every character: the challenges running in the low 16 bits,
+  the ones a death ended in the high 16, a finished one in both (a finished Hardcore is
+  `0x00010001`). It fills the column from its own table at every startup. Without the column
+  nothing is written. An older core's SMALLINT column has a byte each and only the first seven
+  challenges; the module writes that layout there. The character select screen shows an icon for
+  each challenge: Boaring Adventure a boar, Exhaustion a sleeping moon.
 
 ## Installation
 
