@@ -101,7 +101,7 @@ namespace Challenges
         void ShowMenu(Player* player, ObjectGuid source, uint32 text)
         {
             ClearGossipMenuFor(player);
-            uint8 const active = Active(player);
+            uint16 const active = Active(player);
             for (Challenge challenge : ALL_CHALLENGES)
             {
                 if (active & challenge)
@@ -190,6 +190,7 @@ namespace Challenges
             PLAYERHOOK_ON_LOAD_FROM_DB,
             PLAYERHOOK_ON_MAP_CHANGED,
             PLAYERHOOK_ON_GIVE_EXP,
+            PLAYERHOOK_ON_GET_REST_BONUS_MAX,
             PLAYERHOOK_CAN_EQUIP_ITEM,
             PLAYERHOOK_CAN_USE_ITEM,
             PLAYERHOOK_CAN_LEARN_TALENT,
@@ -215,6 +216,7 @@ namespace Challenges
             HandleLogin(player);
             if (HandleHardcoreLevel(player))
                 ScheduleMilestoneMenu(player);
+            HandleBoaringLevel(player);
         }
 
         // Before the player is in the world: the account's Hardcore achievements come along quietly.
@@ -255,6 +257,7 @@ namespace Challenges
             HandleLevel(player);
             if (HandleHardcoreLevel(player))
                 ScheduleMilestoneMenu(player);
+            HandleBoaringLevel(player);
             EnforceIronMan(player);
 
             // A level-up can open a gap to a Hardcore member of the group.
@@ -264,9 +267,11 @@ namespace Challenges
                 QueueGroupCheck(group, player->GetGUID());
         }
 
+        // Arenas and some teleports clear auras; the herds' phase comes back with the new map.
         void OnPlayerMapChanged(Player* player) override
         {
             EnforceIronMan(player);
+            UpdateBoaringPhase(player);
         }
 
         void OnPlayerDeleteFromDB(CharacterDatabaseTransaction trans, uint32 guid) override
@@ -277,6 +282,11 @@ namespace Challenges
         void OnPlayerGiveXP(Player* player, uint32& amount, Unit* victim, uint8 xpSource) override
         {
             HandleXP(player, amount, victim, xpSource);
+        }
+
+        void OnPlayerGetRestBonusMax(Player* player, float& restBonusMax) override
+        {
+            HandleRestBonusMax(player, restBonusMax);
         }
 
         bool OnPlayerCanEquipItem(Player* player, uint8 /*slot*/, uint16& /*dest*/, Item* item, bool /*swap*/, bool notLoading) override
@@ -634,6 +644,8 @@ namespace Challenges
                 { "slowxp",      HandleTakeCommand<CHALLENGE_SLOW_XP>,         SEC_PLAYER, Console::No },
                 { "questxp",     HandleTakeCommand<CHALLENGE_QUEST_XP_ONLY>,   SEC_PLAYER, Console::No },
                 { "itemquality", HandleTakeCommand<CHALLENGE_ITEM_QUALITY>,    SEC_PLAYER, Console::No },
+                { "boaring",     HandleTakeCommand<CHALLENGE_BOARING>,         SEC_PLAYER, Console::No },
+                { "exhaustion",  HandleTakeCommand<CHALLENGE_EXHAUSTION>,      SEC_PLAYER, Console::No },
             };
 
             static ChatCommandTable commandTable =

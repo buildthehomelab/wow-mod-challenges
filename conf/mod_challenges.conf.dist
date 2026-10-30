@@ -3,8 +3,8 @@
 ########################################
 # mod-challenges
 #
-# Opt-in challenges: Hardcore, Iron Man, Self-Found, Self-Crafted, Slow XP, Quest XP Only and Item
-# Quality Level. A character takes them at the Shrine of Challenge in its starting area, or with
+# Opt-in challenges: Hardcore, Iron Man, Self-Found, Self-Crafted, Slow XP, Quest XP Only, Item
+# Quality Level, Boaring Adventure and Exhaustion. A character takes them at the Shrine of Challenge in its starting area, or with
 # .challenge <name>, while it is still at its starting level. A death ends Hardcore and Iron Man;
 # the others last for the character's life. The record is the characters table
 # mod_challenges_character.
@@ -26,6 +26,8 @@ Challenges.Enable = 1
 #    Challenges.SlowXP.Enable
 #    Challenges.QuestXPOnly.Enable
 #    Challenges.ItemQuality.Enable
+#    Challenges.Boaring.Enable
+#    Challenges.Exhaustion.Enable
 #        Description: Whether each challenge can be taken and is enforced. Gear rules are checked
 #                     when gear is put on, so gear worn while a challenge was switched off stays on.
 #        Default:     1
@@ -37,6 +39,8 @@ Challenges.SelfCrafted.Enable = 1
 Challenges.SlowXP.Enable = 1
 Challenges.QuestXPOnly.Enable = 1
 Challenges.ItemQuality.Enable = 1
+Challenges.Boaring.Enable = 1
+Challenges.Exhaustion.Enable = 1
 
 #
 #    Challenges.Announce.Start
@@ -188,3 +192,45 @@ Challenges.SelfFound.StartMoneyAllowance = 10000
 #        Default:     0.5
 
 Challenges.SlowXP.Rate = 0.5
+
+#
+#    Challenges.Boaring.FinishLevel
+#        Description: Level at which Boaring Adventure is done: its rewards are given, and its rule
+#                     (experience from boars only) lifts. It also suits the herds, which reach 60.
+#                     0 lets it run for the character's life, with no rewards.
+#        Default:     60
+
+Challenges.Boaring.FinishLevel = 60
+
+#
+#    Challenges.Boaring.Rewards
+#        Description: Boaring Adventure's rewards at its finish level: the account-wide title the
+#                     Hambringer and the mount below; with Exhaustion and Slow XP running too, also
+#                     the title That Which Has No Life and the sword below. The titles need the
+#                     module's rows in the client patch (see the README).
+#        Default:     1
+
+Challenges.Boaring.Rewards = 1
+
+#
+#    Challenges.Boaring.MountSpell
+#        Description: Mount spell taught at the finish level. 0 gives none.
+#        Default:     400624 (Wild Goretusk, from the realm's retail mount port)
+
+Challenges.Boaring.MountSpell = 400624
+
+#
+#    Challenges.Boaring.SwordItem
+#        Description: Item given for finishing with Exhaustion and Slow XP. 0 gives none.
+#        Default:     9507000 (Sword of a Thousand Truths, from the module's world SQL)
+
+Challenges.Boaring.SwordItem = 9507000
+
+#
+#    Challenges.Boaring.BoarModels
+#        Description: CreatureModelData ids that count as boars, besides the Boar beast family.
+#                     66 is the boar model (the undead Battle Boars, Swine), 1631 the fel boar
+#                     (Helboars, Felboars). Separate them with spaces.
+#        Default:     "66 1631"
+
+Challenges.Boaring.BoarModels = "66 1631"

@@ -16,6 +16,10 @@
  *  - Slow XP: a fraction of the normal experience.
  *  - Quest XP Only: experience from quests only.
  *  - Item Quality Level: grey and white gear only.
+ *  - Boaring Adventure: experience from killing boars only. Herds of boars that only its
+ *    characters see fill the levels and zones the world has none for. It finishes by itself at
+ *    level 60, with a title and a mount.
+ *  - Exhaustion: no rested experience.
  *
  * Only Hardcore and Iron Man end with a death; the others last for the character's life. Most can
  * be combined. The challenges taken and how they ended are kept in the characters table
@@ -24,6 +28,8 @@
  * Hardcore earns account-wide achievements, each with a title: one for every milestone reached
  * alive, and one for the level band a death at level 10 or higher ends it in. The account keeps
  * them in mod_challenges_account_reward and every character of it is given them as it loads.
+ * Boaring Adventure's titles (the Hambringer, and That Which Has No Life with Exhaustion and Slow XP
+ * too) are account-wide the same way.
  *
  * Released under the MIT License.
  */
@@ -55,8 +61,12 @@ namespace Challenges
     constexpr uint32 TEXT_MILESTONE = 9503803;
     constexpr uint32 MENU_MILESTONE = 9503801;    // runtime gossip menu id of the milestone window
 
+    // Boaring Adventure: the server-side aura that puts its characters in the herds' phase (bit 26).
+    constexpr uint32 SPELL_BOARING_PHASE = 90700;
+    constexpr uint32 PHASE_BOARING = 0x04000000;
+
     // Bits, so a character can carry more than one. The values are stored in the database.
-    enum Challenge : uint8
+    enum Challenge : uint16
     {
         CHALLENGE_HARDCORE      = 0x01,
         CHALLENGE_IRONMAN       = 0x02,
@@ -65,18 +75,25 @@ namespace Challenges
         CHALLENGE_SLOW_XP       = 0x10,
         CHALLENGE_QUEST_XP_ONLY = 0x20,
         CHALLENGE_ITEM_QUALITY  = 0x40,
+        CHALLENGE_BOARING       = 0x80,
+        CHALLENGE_EXHAUSTION    = 0x100,
     };
 
     constexpr Challenge ALL_CHALLENGES[] = { CHALLENGE_HARDCORE, CHALLENGE_IRONMAN, CHALLENGE_SELF_FOUND,
-        CHALLENGE_SELF_CRAFTED, CHALLENGE_SLOW_XP, CHALLENGE_QUEST_XP_ONLY, CHALLENGE_ITEM_QUALITY };
+        CHALLENGE_SELF_CRAFTED, CHALLENGE_SLOW_XP, CHALLENGE_QUEST_XP_ONLY, CHALLENGE_ITEM_QUALITY, CHALLENGE_BOARING,
+        CHALLENGE_EXHAUSTION };
 
     // The challenges a death ends.
-    constexpr uint8 ENDS_ON_DEATH = CHALLENGE_HARDCORE | CHALLENGE_IRONMAN;
+    constexpr uint16 ENDS_ON_DEATH = CHALLENGE_HARDCORE | CHALLENGE_IRONMAN;
+
+    // The challenges an older Evermore core's SMALLINT characters.challenges has room for: seven
+    // bits for the running ones and seven for the ended ones. Its INT column takes all of them.
+    constexpr uint16 SELECT_MARKER_CHALLENGES = 0x7F;
 
     struct Config
     {
         bool enabled = true;
-        uint8 allowed = 0;  // the challenges switched on
+        uint16 allowed = 0;  // the challenges switched on
         bool announceStart = true;
         bool announceDeath = true;
         bool announceMilestone = true;
@@ -96,6 +113,11 @@ namespace Challenges
         bool selfFoundGroups = false;
         uint32 selfFoundMoneyAllowance = 10000;  // copper on top of the start money
         float slowXpRate = 0.5f;
+        uint32 boaringFinishLevel = 60;          // 0 = it never finishes
+        bool boaringRewards = true;
+        uint32 boaringMountSpell = 400624;       // Wild Goretusk
+        uint32 boaringSwordItem = 9507000;       // Sword of a Thousand Truths
+        std::vector<uint32> boaringModels;       // CreatureModelData ids that are boars
     };
 
     Config const& GetConfig();
@@ -105,13 +127,13 @@ namespace Challenges
     char const* Name(Challenge challenge);
     char const* Command(Challenge challenge);
     std::string Rules(Challenge challenge);
-    std::string Names(uint8 mask);
+    std::string Names(uint16 mask);
 
     bool IsAllowed(Challenge challenge);
     bool AtStartLevel(Player const* player);
 
     // The challenges running on the player and enforced by the config.
-    uint8 Active(Player const* player);
+    uint16 Active(Player const* player);
     bool Has(Player const* player, Challenge challenge);
     // Whether the challenges on the player keep them out of groups. The guid form reads the shared
     // record and is safe from any thread; the Player form is for the player's own thread.
@@ -153,6 +175,15 @@ namespace Challenges
     void HandleLoad(Player* player);
     void HandleDelete(CharacterDatabaseTransaction trans, ObjectGuid::LowType guid);
     void HandleXP(Player* player, uint32& amount, Unit* victim, uint8 source);
+    // Boaring Adventure: whether a kill counts. Boars are the Boar beast family and anything wearing a
+    // boar model (Helboars, Felboars, the undead Battle Boars).
+    bool IsBoar(Unit const* victim);
+    // Boaring Adventure at its finish level: the rewards, and the challenge finishes.
+    void HandleBoaringLevel(Player* player);
+    // The herds' phase aura on Boaring Adventure characters, and off everyone else.
+    void UpdateBoaringPhase(Player* player);
+    // Exhaustion: the most rest the character may hold, 0.
+    void HandleRestBonusMax(Player* player, float& restBonusMax);
     void SendStatus(ChatHandler* handler, Player* player);
 
     // Groups that a member who must play solo was added to without an invite (playerbots adds

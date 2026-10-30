@@ -12,9 +12,11 @@ character takes on at the start of its life:
 | **Slow XP** | Half the normal experience (configurable). | no |
 | **Quest XP Only** | Experience from quests only. | no |
 | **Item Quality Level** | Grey and white gear only. | no |
+| **Boaring Adventure** | Experience from killing boars only, until level 60. Herds of boars only its characters see fill the levels and zones the world has none for. A title and a mount at 60. | no |
+| **Exhaustion** | No rested experience. | no |
 
 Challenges can be combined, except that Iron Man can't be paired with Self-Crafted or Item Quality
-Level. A challenge can't be put down once taken. When a death ends Hardcore or Iron Man, the
+Level, nor Boaring Adventure with Quest XP Only. A challenge can't be put down once taken. When a death ends Hardcore or Iron Man, the
 character plays on without it, and that challenge can't be taken again on that character.
 
 ## Taking a challenge
@@ -41,6 +43,8 @@ The same works by command:
 .challenge slowxp
 .challenge questxp
 .challenge itemquality
+.challenge boaring
+.challenge exhaustion
 ```
 
 ## What counts as a death
@@ -154,6 +158,57 @@ challenge is refunded.
 - **Item Quality Level**: items above white quality can't be equipped. Unlike Iron Man, enchants
   and everything else are allowed.
 
+## Boaring Adventure details
+
+Inspired by South Park's *Make Love, Not Warcraft*: level up by killing boars and nothing else.
+
+- **What counts**: kills of creatures in the Boar beast family, and of anything wearing the boar or
+  fel boar model (`Challenges.Boaring.BoarModels`): Helboars, Felboars, the undead Battle Boars,
+  Swine. Quilboars are people, not boars. Group kills count; each member gets their share as usual.
+- **No other experience**: quests, exploring, battlegrounds and every other kill give none. A
+  hunter's pet still gets its share from every kill, so it keeps up.
+- **Herds**: stock boars leave whole level ranges and start zones without any: none outside dungeons
+  from level 18 to 47, none in Tirisfal, Teldrassil, Eversong or Azuremyst, none in the Barrens.
+  The module adds 935 boars in 50 level bands, from piglets in every starting area to level 60
+  in the Plaguelands, Winterspring and Silithus, in small herds where each zone's own wildlife
+  roams. They stand in a phase of their own (bit 26), which only Boaring Adventure characters
+  are in, through a hidden aura (spell 90700): nobody else sees them, bots included, so the
+  challenge's characters have them to themselves. The aura is put back on at login, after a map
+  change, and taken off when the challenge is done. A group member outside the phase gets no
+  experience from a herd boar, but still counts in the group's split, and the group's loot rules
+  can hand a corpse to someone who can't see it: group with other boar hunters.
+
+| Levels | Herds (zone) |
+|--------|--------------|
+| 1-10 | Elwynn Forest, Tirisfal Glades, Teldrassil, Eversong Woods, Azuremyst Isle (two bands each) |
+| 10-18 | The Barrens, Silverpine Forest, Darkshore, Bloodmyst Isle, Ghostlands (two bands each) |
+| 17-29 | Redridge, Ashenvale, Wetlands, Stonetalon, Duskwood, Hillsbrad, Thousand Needles |
+| 28-41 | Stranglethorn (two bands), Arathi, Desolace, Alterac, Badlands, Swamp of Sorrows, Dustwallow |
+| 41-55 | Feralas, Hinterlands, Tanaris, Searing Gorge, Un'Goro, Felwood, Blasted Lands, Azshara, Burning Steppes, Western Plaguelands |
+| 54-60 | Winterspring (two bands), Eastern Plaguelands (two bands), Silithus |
+
+  Stock boars fill the rest: Dun Morogh, Durotar, Mulgore, Westfall and Loch Modan up to 17, the
+  Ashmane Boars of the Blasted Lands, and Hellfire's Helboars past 60. `tools/build_herds.py` writes
+  the herds' SQL from the bands at its top and the world database (see the file).
+- **Finish**: at level 60 (`Challenges.Boaring.FinishLevel`) the challenge is done. It is
+  announced, and the rule lifts, since Outland and Northrend have almost no boars.
+- **Rewards** at the finish, account-wide titles like Hardcore's (`Challenges.Boaring.Rewards`):
+
+| Achievement | Reward | For |
+|-------------|--------|-----|
+| Hambringer | *Name* the Hambringer, and a Wild Goretusk to ride (`Challenges.Boaring.MountSpell`) | reaching 60 |
+| That Which Has No Life | *Name*, That Which Has No Life, and the Sword of a Thousand Truths (`Challenges.Boaring.SwordItem`) | reaching 60 with Exhaustion and Slow XP running too |
+
+  The Sword of a Thousand Truths is a trophy: a level 1 one-hander with 1-2 damage and no stats,
+  in The Hungering Cold's look, soulbound and unique. Miscellaneous, so every class can hold it.
+  It goes into the bags, or by mail when they are full. The mount is the character's own; modules
+  that share mounts across an account share it like any other.
+
+## Exhaustion details
+
+- The character never gets rested experience: the most rest it may hold is 0, so an inn, a night
+  offline or another module's rest perk never fills the bar.
+
 ## Configuration
 
 See `conf/mod_challenges.conf.dist`. Every option has a comment.
@@ -161,7 +216,7 @@ See `conf/mod_challenges.conf.dist`. Every option has a comment.
 | Key | Default | Description |
 |-----|---------|-------------|
 | `Challenges.Enable` | `1` | Master switch |
-| `Challenges.<Name>.Enable` | `1` | Each challenge on or off (`Hardcore`, `IronMan`, `SelfFound`, `SelfCrafted`, `SlowXP`, `QuestXPOnly`, `ItemQuality`) |
+| `Challenges.<Name>.Enable` | `1` | Each challenge on or off (`Hardcore`, `IronMan`, `SelfFound`, `SelfCrafted`, `SlowXP`, `QuestXPOnly`, `ItemQuality`, `Boaring`, `Exhaustion`) |
 | `Challenges.Announce.Start` / `.Death` / `.Milestone` | `1` | Realm-wide announcements |
 | `Challenges.MilestoneLevel` | `60` | Level that counts as beating a challenge other than Hardcore (announced; it keeps running) |
 | `Challenges.Hardcore.Milestones` | `"60 70 80"` | Hardcore milestones; from the first one it can be finished |
@@ -178,20 +233,31 @@ See `conf/mod_challenges.conf.dist`. Every option has a comment.
 | `Challenges.SelfFound.AllowGroups` | `0` | Whether Self-Found characters may group |
 | `Challenges.SelfFound.StartMoneyAllowance` | `10000` | Copper on top of the start money a character may carry when it takes Self-Found |
 | `Challenges.SlowXP.Rate` | `0.5` | Share of normal experience for Slow XP |
+| `Challenges.Boaring.FinishLevel` | `60` | Level at which Boaring Adventure is done and rewarded; 0 = never |
+| `Challenges.Boaring.Rewards` | `1` | Boaring Adventure's titles, mount and sword |
+| `Challenges.Boaring.MountSpell` | `400624` | Mount spell for finishing (Wild Goretusk) |
+| `Challenges.Boaring.SwordItem` | `9507000` | Item for finishing with Exhaustion and Slow XP |
+| `Challenges.Boaring.BoarModels` | `"66 1631"` | Creature models that count as boars, besides the Boar family |
 
 ## Requirements
 
 - AzerothCore WotLK (3.3.5a), a recent master: the module uses the PlayerScript hooks for
   learning spells and talents, trainer spell states, trade items and the first login.
-- No addon. Hardcore's achievements and titles need rows in the client's spell patch (below);
+- No addon. The achievements, titles and the sword need rows in the client's spell patch (below);
   everything else works without a client patch.
+- Boaring Adventure's default mount is the Wild Goretusk of the Evermore realm's retail mount port
+  (spell 400624). On another realm, set `Challenges.Boaring.MountSpell` to a mount it has.
 - Optional: modules that share items across an account can keep Self-Found characters out
   through `src/ChallengesApi.h` (see above), and modules with an auction or an experience bonus
   can apply Hardcore's rules through it.
 - Optional: on a core with a `characters`.`challenges` column (the Evermore core's character select
-  screen), the module keeps it set for every character: the challenges running in the low byte,
-  the ones a death ended in the high byte, a finished Hardcore as `0x0101`. It fills the column
-  from its own table at every startup. Without the column nothing is written.
+  screen), the module keeps it set for every character: the challenges running in the low 16 bits,
+  the ones a death ended in the high 16, a finished one in both (a finished Hardcore is
+  `0x00010001`). It fills the column from its own table at every startup. Without the column
+  nothing is written. An older core's SMALLINT column has a byte each and only the first seven
+  challenges; the module writes that layout there. The Evermore core that widens the column has to go out together
+  with this version of the module: an older module would write the byte layout back into it. The character select screen shows an icon for
+  each challenge: Boaring Adventure a boar, Exhaustion a sleeping moon.
 
 ## Installation
 
@@ -205,13 +271,15 @@ symbol comes from the folder name. The SQL in `data/sql` is applied by the Azero
 (`db-world` and `db-characters`).
 
 IDs used: gameobject entry, spawn guids, npc_text and the runtime gossip menu ids 9503800-9503899
-(the module uses 9503800-9503808); achievements 9260-9270 (9260-9299 reserved); CharTitles
-178-188 with title bits 143-153.
+(the module uses 9503800-9503808); achievements 9260-9272 (9260-9299 reserved); CharTitles
+178-190 with title bits 143-155; creature entries 9507000-9507099 (uses 9507000-9507049) and spawn
+guids 9507100-9508999 (uses 9507100-9508034) for the boar herds; spell 90700 (server-side phase
+aura, 90700-90709 reserved); item 9507000; phase bit 26 (`0x04000000`).
 
 ## Client patch
 
-Hardcore's achievements and titles are rows in Achievement.dbc and CharTitles.dbc. Without them
-the client shows nothing for them. `tools/build_patch.py` adds them to the realm's spell patch
+The achievements and titles are rows in Achievement.dbc and CharTitles.dbc, and the sword is a row
+in Item.dbc. Without them the client shows nothing for them (and the sword as a question mark). `tools/build_patch.py` adds them to the realm's spell patch
 and writes `data/sql/db-world/mod_challenges_world_rewards.sql` from the same table:
 
 ```
@@ -220,7 +288,7 @@ python3 tools/build_patch.py --patch patch-z80-spells-and-items.MPQ --client /pa
 ```
 
 It keeps every other file of the patch as it is and every row in its place; new rows go at the
-end. `--client` is only needed the first time, when the patch has no CharTitles.dbc yet. It needs
+end. `--client` is only needed the first time, when the patch has no CharTitles.dbc or Item.dbc yet. It needs
 [StormLib](https://github.com/ladislav-zezula/StormLib) (`STORMLIB`, default
 `/usr/local/lib/libstorm.dylib`). Running it again on its own output changes nothing.
 
