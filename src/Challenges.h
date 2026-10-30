@@ -63,6 +63,7 @@ namespace Challenges
 
     // Boaring Adventure: the server-side aura that puts its characters in the herds' phase (bit 26).
     constexpr uint32 SPELL_BOARING_PHASE = 90700;
+    constexpr uint32 PHASE_BOARING = 0x04000000;
 
     // Bits, so a character can carry more than one. The values are stored in the database.
     enum Challenge : uint16
@@ -181,6 +182,8 @@ namespace Challenges
     void HandleBoaringLevel(Player* player);
     // The herds' phase aura on Boaring Adventure characters, and off everyone else.
     void UpdateBoaringPhase(Player* player);
+    // Exhaustion: the most rest the character may hold, 0.
+    void HandleRestBonusMax(Player* player, float& restBonusMax);
     void SendStatus(ChatHandler* handler, Player* player);
 
     // Groups that a member who must play solo was added to without an invite (playerbots adds

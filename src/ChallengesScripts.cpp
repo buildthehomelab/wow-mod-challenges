@@ -190,6 +190,7 @@ namespace Challenges
             PLAYERHOOK_ON_LOAD_FROM_DB,
             PLAYERHOOK_ON_MAP_CHANGED,
             PLAYERHOOK_ON_GIVE_EXP,
+            PLAYERHOOK_ON_GET_REST_BONUS_MAX,
             PLAYERHOOK_CAN_EQUIP_ITEM,
             PLAYERHOOK_CAN_USE_ITEM,
             PLAYERHOOK_CAN_LEARN_TALENT,
@@ -281,6 +282,11 @@ namespace Challenges
         void OnPlayerGiveXP(Player* player, uint32& amount, Unit* victim, uint8 xpSource) override
         {
             HandleXP(player, amount, victim, xpSource);
+        }
+
+        void OnPlayerGetRestBonusMax(Player* player, float& restBonusMax) override
+        {
+            HandleRestBonusMax(player, restBonusMax);
         }
 
         bool OnPlayerCanEquipItem(Player* player, uint8 /*slot*/, uint16& /*dest*/, Item* item, bool /*swap*/, bool notLoading) override

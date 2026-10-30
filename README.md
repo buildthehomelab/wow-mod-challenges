@@ -174,7 +174,9 @@ Inspired by South Park's *Make Love, Not Warcraft*: level up by killing boars an
   roams. They stand in a phase of their own (bit 26), which only Boaring Adventure characters
   are in, through a hidden aura (spell 90700): nobody else sees them, bots included, so the
   challenge's characters have them to themselves. The aura is put back on at login, after a map
-  change, and taken off when the challenge is done.
+  change, and taken off when the challenge is done. A group member outside the phase gets no
+  experience from a herd boar, but still counts in the group's split, and the group's loot rules
+  can hand a corpse to someone who can't see it: group with other boar hunters.
 
 | Levels | Herds (zone) |
 |--------|--------------|
@@ -204,9 +206,8 @@ Inspired by South Park's *Make Love, Not Warcraft*: level up by killing boars an
 
 ## Exhaustion details
 
-- The character never gets rested experience. The rested pool is emptied at login and before every
-  experience gain, so an inn or a night offline puts nothing into it that pays out. The bar may
-  still show some rest while the character sits in an inn; it is gone before it counts.
+- The character never gets rested experience: the most rest it may hold is 0, so an inn, a night
+  offline or another module's rest perk never fills the bar.
 
 ## Configuration
 

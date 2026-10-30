@@ -499,14 +499,13 @@ namespace Challenges
                     return;
                 }
 
+            Item* item = Item::CreateItem(itemId, 1, player);
+            if (!item)
+                return;
+            // From the Shrine of Challenge: a game object's mail can't be returned to a player.
             CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
-            MailDraft draft(subject, body);
-            if (Item* item = Item::CreateItem(itemId, 1, player))
-            {
-                item->SaveToDB(trans);
-                draft.AddItem(item);
-            }
-            draft.SendMailTo(trans, MailReceiver(player), MailSender(MAIL_NORMAL, player->GetGUID().GetCounter(), MAIL_STATIONERY_GM));
+            item->SaveToDB(trans);
+            MailDraft(subject, body).AddItem(item).SendMailTo(trans, MailReceiver(player), MailSender(MAIL_GAMEOBJECT, SHRINE_ENTRY));
             CharacterDatabase.CommitTransaction(trans);
             ChatHandler(player->GetSession()).SendSysMessage("Your bags are full: it waits in your mailbox.");
         }
@@ -1174,8 +1173,6 @@ namespace Challenges
             QueueGroupCheck(group, subject);
 
         UpdateBoaringPhase(player);
-        if (Has(player, CHALLENGE_EXHAUSTION))
-            player->SetRestBonus(0.0f);
 
         uint16 const mask = Active(player);
         if (!mask || !config.loginReminder)
@@ -1225,13 +1222,16 @@ namespace Challenges
     // from the same amount afterwards.
     void HandleXP(Player* player, uint32& amount, Unit* victim, uint8 source)
     {
-        // The core takes the rested bonus right after this hook, so an emptied pool never pays out,
-        // whatever an inn or a night offline put into it.
-        if (Has(player, CHALLENGE_EXHAUSTION) && player->GetRestBonus() > 0.0f)
-            player->SetRestBonus(0.0f);
-
         if (!amount)
             return;
+
+        // Boaring Adventure's herds stand in a phase of their own. A group member outside it can't see
+        // the boar, so takes nothing from it (the core shares group kills by distance alone).
+        if (victim && (victim->GetPhaseMask() & PHASE_BOARING) && !player->InSamePhase(victim))
+        {
+            amount = 0;
+            return;
+        }
 
         // Hardcore's cap also covers the core's own experience auras (heirlooms), which are already
         // in the amount: kills carry SPELL_AURA_MOD_XP_PCT, quests SPELL_AURA_MOD_XP_QUEST_PCT.
@@ -1309,6 +1309,10 @@ namespace Challenges
             entry.finished |= CHALLENGE_BOARING;
             entry.milestone |= CHALLENGE_BOARING;
         });
+        // The finish goes to the database now; the mount and the sword with it, so a crash before the
+        // next save can't lose them.
+        if (config.boaringRewards)
+            player->SaveToDB(false, false);
 
         uint32 const now = uint32(GameTime::GetGameTime().count());
         CharacterDatabase.Execute("UPDATE `mod_challenges_character` SET `state` = 2, `milestone_at` = IF(`milestone_at` = 0, {0}, "
@@ -1345,6 +1349,14 @@ namespace Challenges
             return;
         }
         player->AddAura(SPELL_BOARING_PHASE, player);
+    }
+
+    // Every change of the rest pool goes through Player::SetRestBonus, which holds it to this: an inn,
+    // a night offline, a module's rest perk all leave it empty.
+    void HandleRestBonusMax(Player* player, float& restBonusMax)
+    {
+        if (Has(player, CHALLENGE_EXHAUSTION))
+            restBonusMax = 0.0f;
     }
 
     void SendStatus(ChatHandler* handler, Player* player)
