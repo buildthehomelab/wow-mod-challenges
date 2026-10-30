@@ -1,18 +1,20 @@
-"""Adds Hardcore's account-wide achievements and their titles to the realm's spell patch, and writes
-the matching world SQL.
+"""Adds the challenges' account-wide achievements and their titles (Hardcore, Boaring Adventure) and
+Boaring Adventure's Sword of a Thousand Truths to the realm's spell patch, and writes the matching
+world SQL.
 
     python3 build_patch.py --patch patch-z80-spells-and-items.MPQ --client /path/to/Evermore \\
         --out patch-z80-spells-and-items-new.MPQ --sql ../data/sql/db-world/mod_challenges_world_rewards.sql
 
-Achievement.dbc gets 11 rows in Feats of Strength (it lists only what a character has earned), and
-CharTitles.dbc gets one title for each. The patch has no CharTitles.dbc of its own until the first
+Achievement.dbc gets 13 rows in Feats of Strength (it lists only what a character has earned),
+CharTitles.dbc gets one title for each, and Item.dbc gets the sword (its look is The Hungering
+Cold's, display 35575). The patch has no CharTitles.dbc of its own until the first
 build, so that one starts from the client's newest locale copy (--client). A patch MPQ replaces
 whole files, so every other file of the patch is carried over unchanged. The rows keep the files'
 own order: new rows go at the end, and a rerun rewrites ours where they are (see the
 achievement series note in dbcmpq.py). Run it again on its own output and nothing changes.
 
-Ids: achievements 9260-9270, CharTitles 178-188 with title bits 143-153 (the 3.3.5a client stops
-at 177 and bit 142; the core keeps 192 title bits).
+Ids: achievements 9260-9272, CharTitles 178-190 with title bits 143-155 (the 3.3.5a client stops
+at 177 and bit 142; the core keeps 192 title bits), item 9507000.
 """
 
 import argparse
@@ -49,7 +51,18 @@ REWARDS = [
     (9268, 186, 151, "Inferno", "%s of the Inferno", 1137, "Fall in the Hardcore challenge at level 60 to 69."),
     (9269, 187, 152, "Firestorm", "%s of the Firestorm", 1930, "Fall in the Hardcore challenge at level 70 to 79."),
     (9270, 188, 153, "Phoenix", "%s of the Phoenix", 90221, "Fall in the Hardcore challenge at level 80."),
+    (9271, 189, 154, "Hambringer", "%s the Hambringer", 1578, "Reach level 60 in Boaring Adventure, killing nothing but boars."),
+    (9272, 190, 155, "That Which Has No Life", "%s, That Which Has No Life", 2971,
+     "Reach level 60 in Boaring Adventure together with Exhaustion and Slow XP."),
 ]
+FIRST_ACHIEVEMENT, LAST_ACHIEVEMENT = REWARDS[0][0], REWARDS[-1][0]
+FIRST_TITLE, LAST_TITLE = REWARDS[0][1], REWARDS[-1][1]
+
+# Item.dbc: ID, Class, Subclass, Sound_Override_Subclass, Material, DisplayInfo, InventoryType, SheatheType.
+SWORD_ITEM = 9507000
+SWORD_DBC = [SWORD_ITEM, 2, 14, 7, 1, 35575, 13, 3]  # weapon, miscellaneous (anyone can wield it), sword sounds
+SWORD_NAME = "Sword of a Thousand Truths"
+SWORD_TEXT = "It was foretold, that one day, heroes who could wield the sword might reveal themselves."
 
 
 def dbc_name(table):
@@ -107,6 +120,14 @@ def patch_achievements(path):
     return {r[0]: r[A_UI_ORDER] for r in rows if r[0] in ours}
 
 
+def patch_items(path):
+    rows, strings, fields = read_dbc(path)
+    if fields != len(SWORD_DBC):
+        sys.exit("Item.dbc has %d fields, not %d" % (fields, len(SWORD_DBC)))
+    put(rows, list(SWORD_DBC))
+    write_dbc(path, rows, strings, fields)
+
+
 def patch_titles(path):
     rows, strings, fields = read_dbc(path)
     if fields != CHARTITLES_FIELDS:
@@ -138,13 +159,14 @@ def write_sql(path, order):
         return struct.unpack("<i", struct.pack("<I", v))[0]
 
     lines = [
-        "-- mod-challenges: Hardcore's account-wide achievements and their titles (world database).",
-        "-- Written by tools/build_patch.py, together with the matching rows of the client patch",
-        "-- (patch-z80-spells-and-items.MPQ): achievements 9260-9270 in Feats of Strength, CharTitles",
-        "-- 178-188 (title bits 143-153). They have no criteria: the module grants them. Idempotent.",
-        "-- Undo with data/sql/uninstall/mod_challenges_uninstall_world.sql.",
+        "-- mod-challenges: the challenges' account-wide achievements and their titles, and Boaring",
+        "-- Adventure's sword (world database). Written by tools/build_patch.py, together with the matching",
+        "-- rows of the client patch (patch-z80-spells-and-items.MPQ): achievements %d-%d in Feats of" % (FIRST_ACHIEVEMENT, LAST_ACHIEVEMENT),
+        "-- Strength, CharTitles %d-%d (title bits %d-%d), item %d. The achievements have no criteria: the" % (
+            FIRST_TITLE, LAST_TITLE, REWARDS[0][2], REWARDS[-1][2], SWORD_ITEM),
+        "-- module grants them. Idempotent. Undo with data/sql/uninstall/mod_challenges_uninstall_world.sql.",
         "",
-        "DELETE FROM `achievement_dbc` WHERE `ID` BETWEEN 9260 AND 9270;",
+        "DELETE FROM `achievement_dbc` WHERE `ID` BETWEEN %d AND %d;" % (FIRST_ACHIEVEMENT, LAST_ACHIEVEMENT),
         "INSERT INTO `achievement_dbc` (`ID`, `Faction`, `Instance_Id`, `Supercedes`, `Title_Lang_enUS`, `Title_Lang_Mask`, "
         "`Description_Lang_enUS`, `Description_Lang_Mask`, `Category`, `Points`, `Ui_Order`, `Flags`, `IconID`, `Reward_Lang_enUS`, "
         "`Reward_Lang_Mask`, `Minimum_Criteria`, `Shares_Criteria`) VALUES",
@@ -155,7 +177,7 @@ def write_sql(path, order):
         for a, _t, _b, name, title, icon, description in REWARDS) + ";")
     lines += [
         "",
-        "DELETE FROM `chartitles_dbc` WHERE `ID` BETWEEN 178 AND 188;",
+        "DELETE FROM `chartitles_dbc` WHERE `ID` BETWEEN %d AND %d;" % (FIRST_TITLE, LAST_TITLE),
         "INSERT INTO `chartitles_dbc` (`ID`, `Condition_ID`, `Name_Lang_enUS`, `Name_Lang_Mask`, `Name1_Lang_enUS`, "
         "`Name1_Lang_Mask`, `Mask_ID`) VALUES",
     ]
@@ -163,10 +185,25 @@ def write_sql(path, order):
                             for _a, t, b, _n, title, _i, _d in REWARDS) + ";")
     lines += [
         "",
-        "DELETE FROM `achievement_reward` WHERE `ID` BETWEEN 9260 AND 9270;",
+        "DELETE FROM `achievement_reward` WHERE `ID` BETWEEN %d AND %d;" % (FIRST_ACHIEVEMENT, LAST_ACHIEVEMENT),
         "INSERT INTO `achievement_reward` (`ID`, `TitleA`, `TitleH`, `ItemID`, `Sender`, `Subject`, `Body`, `MailTemplateID`) VALUES",
     ]
     lines.append(",\n".join("(%d, %d, %d, 0, 0, NULL, NULL, 0)" % (a, t, t) for a, t, _b, _n, _ti, _i, _d in REWARDS) + ";")
+    lines += [
+        "",
+        "-- The Sword of a Thousand Truths: a trophy, not a weapon. Level 1, 1-2 damage, no stats, soulbound and",
+        "-- unique, in The Hungering Cold's look. Miscellaneous, so every class can hold it.",
+        "DELETE FROM `item_dbc` WHERE `ID` = %d;" % SWORD_ITEM,
+        "INSERT INTO `item_dbc` (`ID`, `ClassID`, `SubclassID`, `Sound_Override_Subclassid`, `Material`, `DisplayInfoID`, "
+        "`InventoryType`, `SheatheType`) VALUES (%s);" % ", ".join(str(v) for v in SWORD_DBC),
+        "DELETE FROM `item_template` WHERE `entry` = %d;" % SWORD_ITEM,
+        "INSERT INTO `item_template` (`entry`, `class`, `subclass`, `SoundOverrideSubclass`, `name`, `displayid`, `Quality`, "
+        "`BuyCount`, `BuyPrice`, `SellPrice`, `InventoryType`, `AllowableClass`, `AllowableRace`, `ItemLevel`, `RequiredLevel`, "
+        "`maxcount`, `stackable`, `dmg_min1`, `dmg_max1`, `delay`, `bonding`, `description`, `Material`, `sheath`, "
+        "`MaxDurability`, `VerifiedBuild`) VALUES",
+        "(%d, 2, 14, 7, %s, 35575, 5, 1, 17, 3, 13, -1, -1, 1, 1, 1, 1, 1, 2, 2300, 1, %s, 1, 3, 20, 0);"
+        % (SWORD_ITEM, sql_str(SWORD_NAME), sql_str(SWORD_TEXT)),
+    ]
     with open(path, "w", newline="\n") as f:
         f.write("\n".join(lines) + "\n")
     print("wrote", path)
@@ -195,6 +232,15 @@ def main():
             print("CharTitles.dbc from", dbcmpq.client_file(args.client, "enUS", dbc_name("CharTitles"), titles))
             files[dbc_name("CharTitles")] = titles
         patch_titles(titles)
+
+        name, items = find_file(files, dbc_name("Item"))
+        if not items:
+            if not args.client:
+                sys.exit("%s has no Item.dbc yet: pass --client to start from the client's copy" % args.patch)
+            items = os.path.join(tmp, "Item.dbc")
+            print("Item.dbc from", dbcmpq.client_file(args.client, "enUS", dbc_name("Item"), items))
+            files[dbc_name("Item")] = items
+        patch_items(items)
 
         dbcmpq.pack(args.out, [(local, archived) for archived, local in sorted(files.items())])
         print("%s: %d files, %.1f MB" % (args.out, len(files), os.path.getsize(args.out) / 1e6))

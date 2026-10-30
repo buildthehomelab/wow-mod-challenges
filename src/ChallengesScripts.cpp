@@ -101,7 +101,7 @@ namespace Challenges
         void ShowMenu(Player* player, ObjectGuid source, uint32 text)
         {
             ClearGossipMenuFor(player);
-            uint8 const active = Active(player);
+            uint16 const active = Active(player);
             for (Challenge challenge : ALL_CHALLENGES)
             {
                 if (active & challenge)
@@ -215,6 +215,7 @@ namespace Challenges
             HandleLogin(player);
             if (HandleHardcoreLevel(player))
                 ScheduleMilestoneMenu(player);
+            HandleBoaringLevel(player);
         }
 
         // Before the player is in the world: the account's Hardcore achievements come along quietly.
@@ -255,6 +256,7 @@ namespace Challenges
             HandleLevel(player);
             if (HandleHardcoreLevel(player))
                 ScheduleMilestoneMenu(player);
+            HandleBoaringLevel(player);
             EnforceIronMan(player);
 
             // A level-up can open a gap to a Hardcore member of the group.
@@ -264,9 +266,11 @@ namespace Challenges
                 QueueGroupCheck(group, player->GetGUID());
         }
 
+        // Arenas and some teleports clear auras; the herds' phase comes back with the new map.
         void OnPlayerMapChanged(Player* player) override
         {
             EnforceIronMan(player);
+            UpdateBoaringPhase(player);
         }
 
         void OnPlayerDeleteFromDB(CharacterDatabaseTransaction trans, uint32 guid) override
@@ -634,6 +638,8 @@ namespace Challenges
                 { "slowxp",      HandleTakeCommand<CHALLENGE_SLOW_XP>,         SEC_PLAYER, Console::No },
                 { "questxp",     HandleTakeCommand<CHALLENGE_QUEST_XP_ONLY>,   SEC_PLAYER, Console::No },
                 { "itemquality", HandleTakeCommand<CHALLENGE_ITEM_QUALITY>,    SEC_PLAYER, Console::No },
+                { "boaring",     HandleTakeCommand<CHALLENGE_BOARING>,         SEC_PLAYER, Console::No },
+                { "exhaustion",  HandleTakeCommand<CHALLENGE_EXHAUSTION>,      SEC_PLAYER, Console::No },
             };
 
             static ChatCommandTable commandTable =

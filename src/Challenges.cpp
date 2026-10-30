@@ -5,7 +5,8 @@
  * so the table stays small) and kept in a locked map. A player copies their own entry into
  * Player::CustomData the first time a hook asks, so the hooks that run for every player (bots
  * included) never take the lock. Writes go to the database asynchronously. The account-wide
- * Hardcore achievements (mod_challenges_account_reward) are loaded the same way, per account.
+ * Hardcore and Boaring Adventure achievements (mod_challenges_account_reward) are loaded the
+ * same way, per account.
  *
  * Released under the MIT License.
  */
@@ -15,6 +16,7 @@
 #include "CharacterCache.h"
 #include "Chat.h"
 #include "Config.h"
+#include "Creature.h"
 #include "DatabaseEnv.h"
 #include "DataMap.h"
 #include "DBCStores.h"
@@ -66,6 +68,8 @@ namespace Challenges
             { CHALLENGE_SLOW_XP,       "Slow XP",            "slowxp",      "Challenges.SlowXP.Enable" },
             { CHALLENGE_QUEST_XP_ONLY, "Quest XP Only",      "questxp",     "Challenges.QuestXPOnly.Enable" },
             { CHALLENGE_ITEM_QUALITY,  "Item Quality Level", "itemquality", "Challenges.ItemQuality.Enable" },
+            { CHALLENGE_BOARING,       "Boaring Adventure",  "boaring",     "Challenges.Boaring.Enable" },
+            { CHALLENGE_EXHAUSTION,    "Exhaustion",         "exhaustion",  "Challenges.Exhaustion.Enable" },
         };
 
         Definition const* Find(Challenge challenge)
@@ -76,15 +80,18 @@ namespace Challenges
             return nullptr;
         }
 
-        // Iron Man already holds gear to white and has no professions to craft with.
-        uint8 Excludes(Challenge challenge)
+        // Iron Man already holds gear to white and has no professions to craft with. Boaring Adventure
+        // and Quest XP Only leave no experience at all between them.
+        uint16 Excludes(Challenge challenge)
         {
             switch (challenge)
             {
-                case CHALLENGE_IRONMAN:      return CHALLENGE_SELF_CRAFTED | CHALLENGE_ITEM_QUALITY;
-                case CHALLENGE_SELF_CRAFTED: return CHALLENGE_IRONMAN;
-                case CHALLENGE_ITEM_QUALITY: return CHALLENGE_IRONMAN;
-                default:                     return 0;
+                case CHALLENGE_IRONMAN:       return CHALLENGE_SELF_CRAFTED | CHALLENGE_ITEM_QUALITY;
+                case CHALLENGE_SELF_CRAFTED:  return CHALLENGE_IRONMAN;
+                case CHALLENGE_ITEM_QUALITY:  return CHALLENGE_IRONMAN;
+                case CHALLENGE_BOARING:       return CHALLENGE_QUEST_XP_ONLY;
+                case CHALLENGE_QUEST_XP_ONLY: return CHALLENGE_BOARING;
+                default:                      return 0;
             }
         }
 
@@ -98,7 +105,7 @@ namespace Challenges
         // the enchant ids the Runeforging spells write.
         constexpr uint32 RUNE_ENCHANTS[] = { 3365, 3366, 3367, 3368, 3369, 3370, 3594, 3595, 3847, 3883 };
 
-        constexpr uint8 GEAR_CHALLENGES = CHALLENGE_IRONMAN | CHALLENGE_SELF_CRAFTED | CHALLENGE_ITEM_QUALITY;
+        constexpr uint16 GEAR_CHALLENGES = CHALLENGE_IRONMAN | CHALLENGE_SELF_CRAFTED | CHALLENGE_ITEM_QUALITY;
 
         // Hardcore's account-wide achievements (9260-9270), each with a title (CharTitles 178-188)
         // through achievement_reward. Their rows are in the world SQL and the client patch.
@@ -127,15 +134,20 @@ namespace Challenges
             { 9269, 70, 79 },   // of the Firestorm
             { 9270, 80, 255 },  // of the Phoenix
         };
+
+        // Boaring Adventure's account-wide achievements: the Hambringer (CharTitles 189) at its finish
+        // level, and That Which Has No Life (190) when Exhaustion and Slow XP ran with it.
+        constexpr uint32 ACHIEVEMENT_HAMBRINGER = 9271;
+        constexpr uint32 ACHIEVEMENT_NO_LIFE = 9272;
         constexpr time_t NOTICE_INTERVAL = 5;
         constexpr uint8 LEARN_DEPTH = 3;
 
         struct Entry
         {
-            uint8 active = 0;     // taken and still running
-            uint8 ended = 0;      // taken and ended by a death
-            uint8 finished = 0;   // taken and finished (Hardcore, after a milestone)
-            uint8 milestone = 0;  // reached the milestone level while running
+            uint16 active = 0;     // taken and still running
+            uint16 ended = 0;      // taken and ended by a death
+            uint16 finished = 0;   // taken and finished (Hardcore after a milestone, Boaring Adventure)
+            uint16 milestone = 0;  // reached the milestone level while running
             uint8 hardcoreMilestone = 0;  // the highest Hardcore milestone level reached alive
         };
 
@@ -194,35 +206,36 @@ namespace Challenges
         }
 
         // characters.challenges: the challenges running in the low byte, the ones a death ended in the
-        // high byte, a finished one in both (a finished Hardcore is 0x0101). Load() writes the same
-        // from the table.
+        // high byte, a finished one in both (a finished Hardcore is 0x0101). Only the seven the
+        // character select screen knows. Load() writes the same from the table.
         void SaveSelectMarker(Player* player)
         {
             if (!selectColumn)
                 return;
 
             Entry const& entry = State(player).entry;
-            uint32 const marker = uint32(entry.active | entry.finished) | (uint32(entry.ended | entry.finished) << 8);
+            uint32 const marker = uint32((entry.active | entry.finished) & SELECT_MARKER_CHALLENGES) |
+                (uint32((entry.ended | entry.finished) & SELECT_MARKER_CHALLENGES) << 8);
             CharacterDatabase.Execute("UPDATE `characters` SET `challenges` = {} WHERE `guid` = {}", marker,
                 player->GetGUID().GetCounter());
         }
 
-        uint8 Enforced()
+        uint16 Enforced()
         {
             return config.enabled ? config.allowed : 0;
         }
 
-        uint8 AuctionMask()
+        uint16 AuctionMask()
         {
-            uint8 mask = CHALLENGE_SELF_FOUND;
+            uint16 mask = CHALLENGE_SELF_FOUND;
             if (!config.hardcoreAuctionHouse)
                 mask |= CHALLENGE_HARDCORE;
             return mask & Enforced();
         }
 
-        uint8 SoloMask()
+        uint16 SoloMask()
         {
-            uint8 mask = 0;
+            uint16 mask = 0;
             if (!config.selfFoundGroups)
                 mask |= CHALLENGE_SELF_FOUND;
             if (!config.ironManGroups)
@@ -231,9 +244,9 @@ namespace Challenges
         }
 
         // The running challenges of a character, online or not, from the shared map.
-        uint8 ActiveByGuid(ObjectGuid::LowType guid)
+        uint16 ActiveByGuid(ObjectGuid::LowType guid)
         {
-            uint8 const enforced = Enforced();
+            uint16 const enforced = Enforced();
             if (!enforced)
                 return 0;
             std::shared_lock<std::shared_mutex> guard(lock);
@@ -282,7 +295,7 @@ namespace Challenges
             return zone ? zone->area_name[Locale()] : "";
         }
 
-        std::string Tag(uint8 mask)
+        std::string Tag(uint16 mask)
         {
             return "|cffff4040[" + Names(mask) + "]|r ";
         }
@@ -359,7 +372,7 @@ namespace Challenges
         // can enchant their items, is refused to them. EnforceIronMan covers the rest. Death Knight
         // runes are the class's own and stay. Self-Crafted takes only what the player made, but for
         // shirts, tabards and fishing poles. Bags and quivers never count.
-        char const* GearRule(Player const* player, Item const* item, uint8 mask)
+        char const* GearRule(Player const* player, Item const* item, uint16 mask)
         {
             mask &= GEAR_CHALLENGES;
             if (!mask)
@@ -402,12 +415,19 @@ namespace Challenges
             return text;
         }
 
-        // Gives the player one of Hardcore's achievements and records it for the whole account. The
-        // account's other characters get it as they next load (HandleLoad). A game master in GM
+        bool RewardEnabled(uint32 achievementId)
+        {
+            if (achievementId == ACHIEVEMENT_HAMBRINGER || achievementId == ACHIEVEMENT_NO_LIFE)
+                return config.boaringRewards;
+            return config.hardcoreRewards;
+        }
+
+        // Gives the player one of the account-wide achievements and records it for the whole account.
+        // The account's other characters get it as they next load (HandleLoad). A game master in GM
         // mode can't earn achievements; they get it at their next load too.
         void Grant(Player* player, uint32 achievementId)
         {
-            if (!config.hardcoreRewards)
+            if (!RewardEnabled(achievementId))
                 return;
 
             AchievementEntry const* achievement = sAchievementStore.LookupEntry(achievementId);
@@ -447,6 +467,35 @@ namespace Challenges
             for (Reward const& reward : DEATH_REWARDS)
                 if (level >= reward.minLevel && level <= reward.maxLevel)
                     Grant(player, reward.achievement);
+        }
+
+        // Into the bags, or by mail when they are full.
+        void GiveItem(Player* player, uint32 itemId, std::string const& subject, std::string const& body)
+        {
+            if (!sObjectMgr->GetItemTemplate(itemId))
+            {
+                LOG_ERROR("module", "mod-challenges: item {} is missing; run the module's world SQL", itemId);
+                return;
+            }
+
+            ItemPosCountVec dest;
+            if (player->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, itemId, 1) == EQUIP_ERR_OK)
+                if (Item* item = player->StoreNewItem(dest, itemId, true))
+                {
+                    player->SendNewItem(item, 1, true, false);
+                    return;
+                }
+
+            CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+            MailDraft draft(subject, body);
+            if (Item* item = Item::CreateItem(itemId, 1, player))
+            {
+                item->SaveToDB(trans);
+                draft.AddItem(item);
+            }
+            draft.SendMailTo(trans, MailReceiver(player), MailSender(MAIL_NORMAL, player->GetGUID().GetCounter(), MAIL_STATIONERY_GM));
+            CharacterDatabase.CommitTransaction(trans);
+            ChatHandler(player->GetSession()).SendSysMessage("Your bags are full: it waits in your mailbox.");
         }
 
         uint8 FirstMilestone()
@@ -514,6 +563,16 @@ namespace Challenges
         config.selfFoundGroups = sConfigMgr->GetOption<bool>("Challenges.SelfFound.AllowGroups", false);
         config.selfFoundMoneyAllowance = sConfigMgr->GetOption<uint32>("Challenges.SelfFound.StartMoneyAllowance", 10000);
         config.slowXpRate = std::clamp(sConfigMgr->GetOption<float>("Challenges.SlowXP.Rate", 0.5f), 0.0f, 1.0f);
+        config.boaringFinishLevel = sConfigMgr->GetOption<uint32>("Challenges.Boaring.FinishLevel", 60);
+        config.boaringRewards = sConfigMgr->GetOption<bool>("Challenges.Boaring.Rewards", true);
+        config.boaringMountSpell = sConfigMgr->GetOption<uint32>("Challenges.Boaring.MountSpell", 400624);
+        config.boaringSwordItem = sConfigMgr->GetOption<uint32>("Challenges.Boaring.SwordItem", 9507000);
+
+        config.boaringModels.clear();
+        std::string const models = sConfigMgr->GetOption<std::string>("Challenges.Boaring.BoarModels", "66 1631");
+        for (std::string_view token : Acore::Tokenize(models, ' ', false))
+            if (Optional<uint32> model = Acore::StringTo<uint32>(token))
+                config.boaringModels.push_back(*model);
 
         config.hardcoreLevelRange = sConfigMgr->GetOption<uint32>("Challenges.Hardcore.LevelRange", 5);
         config.hardcoreAuctionHouse = sConfigMgr->GetOption<bool>("Challenges.Hardcore.AllowAuctionHouse", false);
@@ -555,7 +614,7 @@ namespace Challenges
             {
                 Field* fields = result->Fetch();
                 Entry& entry = loaded[fields[0].Get<uint32>()];
-                uint8 const challenge = fields[1].Get<uint8>();
+                uint16 const challenge = fields[1].Get<uint16>();
                 switch (fields[2].Get<uint8>())
                 {
                     case 0:  entry.active |= challenge; break;
@@ -574,9 +633,9 @@ namespace Challenges
         selectColumn = CharacterDatabase.Query("SHOW COLUMNS FROM `characters` LIKE 'challenges'") != nullptr;
         if (selectColumn)
             CharacterDatabase.DirectExecute("UPDATE `characters` AS c LEFT JOIN (SELECT `guid`, "
-                "BIT_OR(IF(`state` IN (0, 2), `challenge`, 0)) | (BIT_OR(IF(`state` <> 0, `challenge`, 0)) << 8) AS `marker` "
+                "BIT_OR(IF(`state` IN (0, 2), `challenge`, 0) & {0}) | (BIT_OR(IF(`state` <> 0, `challenge`, 0) & {0}) << 8) AS `marker` "
                 "FROM `mod_challenges_character` GROUP BY `guid`) AS m ON m.`guid` = c.`guid` "
-                "SET c.`challenges` = COALESCE(m.`marker`, 0) WHERE c.`challenges` <> COALESCE(m.`marker`, 0)");
+                "SET c.`challenges` = COALESCE(m.`marker`, 0) WHERE c.`challenges` <> COALESCE(m.`marker`, 0)", uint32(SELECT_MARKER_CHALLENGES));
 
         std::unordered_map<uint32, std::unordered_set<uint32>> rewards;
         if (QueryResult result = CharacterDatabase.Query("SELECT `account`, `achievement` FROM `mod_challenges_account_reward`"))
@@ -598,7 +657,7 @@ namespace Challenges
         std::unique_lock<std::shared_mutex> guard(lock);
         entries = std::move(loaded);
         accountRewards = std::move(rewards);
-        LOG_INFO("server.loading", ">> mod-challenges: {} characters with a challenge, {} accounts with Hardcore achievements",
+        LOG_INFO("server.loading", ">> mod-challenges: {} characters with a challenge, {} accounts with challenge achievements",
             entries.size(), accountRewards.size());
     }
 
@@ -663,11 +722,28 @@ namespace Challenges
                     "your pet still learns from your kills. A death doesn't end it.";
             case CHALLENGE_ITEM_QUALITY:
                 return "Item Quality Level: grey and white gear only. A death doesn't end it.";
+            case CHALLENGE_BOARING:
+            {
+                std::string text = "Boaring Adventure: you gain experience only from killing boars. Quests, exploring, "
+                    "battlegrounds and every other kill give none; your pet still learns from your kills. Herds of boars "
+                    "that only boar hunters can see roam the zones and levels the world has none for.";
+                if (config.boaringFinishLevel)
+                {
+                    text += Acore::StringFormat(" At level {} the challenge is done and its rule lifts.", config.boaringFinishLevel);
+                    if (config.boaringRewards)
+                        text += " You earn the title the Hambringer for your whole account, and a Wild Goretusk to ride. Take "
+                            "Exhaustion and Slow XP with it, and the Sword of a Thousand Truths awaits, with the title That "
+                            "Which Has No Life.";
+                }
+                return text + " A death doesn't end it.";
+            }
+            case CHALLENGE_EXHAUSTION:
+                return "Exhaustion: you never gain rested experience. A death doesn't end it.";
         }
         return "";
     }
 
-    std::string Names(uint8 mask)
+    std::string Names(uint16 mask)
     {
         std::string text;
         for (Challenge challenge : ALL_CHALLENGES)
@@ -687,9 +763,9 @@ namespace Challenges
     }
 
     // A challenge switched off in the config keeps its record but no rules.
-    uint8 Active(Player const* player)
+    uint16 Active(Player const* player)
     {
-        uint8 const enforced = Enforced();
+        uint16 const enforced = Enforced();
         if (!enforced)
             return 0;
         return State(player).entry.active & enforced;
@@ -780,7 +856,7 @@ namespace Challenges
             return Acore::StringFormat("Your {} challenge has ended. It can't be taken again on this character.", Name(challenge));
         if (entry.finished & challenge)
             return Acore::StringFormat("You have finished the {} challenge. It can't be taken again on this character.", Name(challenge));
-        if (uint8 const clash = entry.active & Excludes(challenge))
+        if (uint16 const clash = entry.active & Excludes(challenge))
             return Acore::StringFormat("{} can't be combined with {}.", Name(challenge), Names(clash));
 
         if (!AtStartLevel(player))
@@ -908,6 +984,11 @@ namespace Challenges
                     "Your other characters keep the shared ones.", taken);
             }
 
+        if (challenge == CHALLENGE_BOARING)
+            UpdateBoaringPhase(player);
+        if (challenge == CHALLENGE_EXHAUSTION)
+            player->SetRestBonus(0.0f);
+
         CharacterDatabase.Execute("REPLACE INTO `mod_challenges_character` (`guid`, `challenge`, `state`, `started_at`, `start_level`) "
             "VALUES ({}, {}, 0, {}, {})", guid, uint32(challenge), uint32(GameTime::GetGameTime().count()), uint32(player->GetLevel()));
         SaveSelectMarker(player);
@@ -957,7 +1038,7 @@ namespace Challenges
 
     void HandleDeath(Player* player, Unit* killer)
     {
-        uint8 const mask = Active(player) & ENDS_ON_DEATH;
+        uint16 const mask = Active(player) & ENDS_ON_DEATH;
         if (!mask)
             return;
 
@@ -1013,8 +1094,12 @@ namespace Challenges
         if (!config.milestoneLevel || player->GetLevel() < config.milestoneLevel)
             return;
 
-        // Hardcore has milestones of its own (HandleHardcoreLevel).
-        uint8 const reached = Active(player) & ~CHALLENGE_HARDCORE & ~State(player).entry.milestone;
+        // Hardcore has milestones of its own (HandleHardcoreLevel), and a Boaring Adventure that finishes
+        // is announced by HandleBoaringLevel.
+        uint16 mask = Active(player) & ~CHALLENGE_HARDCORE;
+        if (config.boaringFinishLevel)
+            mask &= ~CHALLENGE_BOARING;
+        uint16 const reached = mask & ~State(player).entry.milestone;
         if (!reached)
             return;
 
@@ -1073,7 +1158,11 @@ namespace Challenges
         if (Group* group = player->GetOriginalGroup())
             QueueGroupCheck(group, subject);
 
-        uint8 const mask = Active(player);
+        UpdateBoaringPhase(player);
+        if (Has(player, CHALLENGE_EXHAUSTION))
+            player->SetRestBonus(0.0f);
+
+        uint16 const mask = Active(player);
         if (!mask || !config.loginReminder)
             return;
         ChatHandler(player->GetSession()).SendSysMessage(Acore::StringFormat("|cffff4040{}|r on this character. "
@@ -1087,7 +1176,7 @@ namespace Challenges
     // get their copies without a word to the guild or anyone near.
     void HandleLoad(Player* player)
     {
-        if (!config.hardcoreRewards)
+        if (!config.hardcoreRewards && !config.boaringRewards)
             return;
 
         std::vector<uint32> owned;
@@ -1100,7 +1189,7 @@ namespace Challenges
         }
 
         for (uint32 achievementId : owned)
-            if (!player->HasAchieved(achievementId))
+            if (RewardEnabled(achievementId) && !player->HasAchieved(achievementId))
                 if (AchievementEntry const* achievement = sAchievementStore.LookupEntry(achievementId))
                     player->CompletedAchievement(achievement);
     }
@@ -1121,6 +1210,11 @@ namespace Challenges
     // from the same amount afterwards.
     void HandleXP(Player* player, uint32& amount, Unit* victim, uint8 source)
     {
+        // The core takes the rested bonus right after this hook, so an emptied pool never pays out,
+        // whatever an inn or a night offline put into it.
+        if (Has(player, CHALLENGE_EXHAUSTION) && player->GetRestBonus() > 0.0f)
+            player->SetRestBonus(0.0f);
+
         if (!amount)
             return;
 
@@ -1137,13 +1231,15 @@ namespace Challenges
                 amount = uint32(std::lround(double(amount) * config.hardcoreMaxXpRate / multiplier));
         }
 
-        uint8 const mask = Active(player) & (CHALLENGE_SLOW_XP | CHALLENGE_QUEST_XP_ONLY);
+        uint16 const mask = Active(player) & (CHALLENGE_SLOW_XP | CHALLENGE_QUEST_XP_ONLY | CHALLENGE_BOARING);
         if (!mask || !amount)
             return;
 
-        if ((mask & CHALLENGE_QUEST_XP_ONLY) && source != PlayerXPSource::XPSOURCE_QUEST && source != PlayerXPSource::XPSOURCE_QUEST_DF)
+        bool const kill = source == PlayerXPSource::XPSOURCE_KILL && victim;
+        bool const quest = source == PlayerXPSource::XPSOURCE_QUEST || source == PlayerXPSource::XPSOURCE_QUEST_DF;
+        if (((mask & CHALLENGE_QUEST_XP_ONLY) && !quest) || ((mask & CHALLENGE_BOARING) && !(kill && IsBoar(victim))))
         {
-            if (source == PlayerXPSource::XPSOURCE_KILL && victim)
+            if (kill)
                 if (Pet* pet = player->GetPet())
                     pet->GivePetXP(player->GetGroup() ? amount / 2 : amount);
             amount = 0;
@@ -1152,6 +1248,88 @@ namespace Challenges
 
         if (mask & CHALLENGE_SLOW_XP)
             amount = uint32(amount * config.slowXpRate);
+    }
+
+    bool IsBoar(Unit const* victim)
+    {
+        Creature const* creature = victim ? victim->ToCreature() : nullptr;
+        if (!creature)
+            return false;
+        if (creature->GetCreatureTemplate()->family == CREATURE_FAMILY_BOAR)
+            return true;
+        CreatureDisplayInfoEntry const* display = sCreatureDisplayInfoStore.LookupEntry(creature->GetNativeDisplayId());
+        return display && std::find(config.boaringModels.begin(), config.boaringModels.end(), display->ModelId) !=
+            config.boaringModels.end();
+    }
+
+    // Also run at login, for a level set while offline.
+    void HandleBoaringLevel(Player* player)
+    {
+        if (!config.boaringFinishLevel || player->GetLevel() < config.boaringFinishLevel || !Has(player, CHALLENGE_BOARING))
+            return;
+
+        uint16 const active = Active(player);
+        bool const noLife = (active & CHALLENGE_EXHAUSTION) && (active & CHALLENGE_SLOW_XP);
+        if (config.boaringRewards)
+        {
+            Grant(player, ACHIEVEMENT_HAMBRINGER);
+            if (noLife)
+                Grant(player, ACHIEVEMENT_NO_LIFE);
+
+            if (uint32 const mount = config.boaringMountSpell)
+            {
+                if (!sSpellMgr->GetSpellInfo(mount))
+                    LOG_ERROR("module", "mod-challenges: Boaring Adventure mount spell {} doesn't exist", mount);
+                else if (!player->HasSpell(mount))
+                    player->learnSpell(mount);
+            }
+            if (noLife && config.boaringSwordItem)
+                GiveItem(player, config.boaringSwordItem, "Sword of a Thousand Truths",
+                    "It was foretold, that one day, heroes who could wield the sword might reveal themselves.");
+        }
+
+        Update(player, [](Entry& entry)
+        {
+            entry.active &= ~CHALLENGE_BOARING;
+            entry.finished |= CHALLENGE_BOARING;
+            entry.milestone |= CHALLENGE_BOARING;
+        });
+
+        uint32 const now = uint32(GameTime::GetGameTime().count());
+        CharacterDatabase.Execute("UPDATE `mod_challenges_character` SET `state` = 2, `milestone_at` = IF(`milestone_at` = 0, {0}, "
+            "`milestone_at`), `ended_at` = {0}, `end_level` = {1}, `end_map` = {2}, `end_zone` = {3} WHERE `guid` = {4} AND "
+            "`challenge` = {5} AND `state` = 0", now, uint32(player->GetLevel()), player->GetMapId(), player->GetZoneId(),
+            player->GetGUID().GetCounter(), uint32(CHALLENGE_BOARING));
+        SaveSelectMarker(player);
+        UpdateBoaringPhase(player);
+
+        ChatHandler(player->GetSession()).SendSysMessage(noLife ?
+            "|cffff4040Boaring Adventure|r finished. You have spent your life killing boars, and the Sword of a Thousand "
+            "Truths is yours." : "|cffff4040Boaring Adventure|r finished. Experience comes from anything again.");
+        if (config.announceMilestone)
+            Announce(Tag(CHALLENGE_BOARING) + player->GetName() + " has reached level " + std::to_string(player->GetLevel()) +
+                (noLife ? " killing nothing but boars, and found the Sword of a Thousand Truths!" : " killing nothing but boars!"));
+
+        LOG_INFO("module", "mod-challenges: {} ({}) finished Boaring Adventure at level {}{}", player->GetName(),
+            player->GetGUID().GetCounter(), player->GetLevel(), noLife ? " (with Exhaustion and Slow XP)" : "");
+    }
+
+    void UpdateBoaringPhase(Player* player)
+    {
+        bool const boaring = Has(player, CHALLENGE_BOARING);
+        if (boaring == player->HasAura(SPELL_BOARING_PHASE))
+            return;
+        if (!boaring)
+        {
+            player->RemoveAurasDueToSpell(SPELL_BOARING_PHASE);
+            return;
+        }
+        if (!sSpellMgr->GetSpellInfo(SPELL_BOARING_PHASE))
+        {
+            LOG_ERROR("module", "mod-challenges: spell {} is missing; run the module's world SQL", SPELL_BOARING_PHASE);
+            return;
+        }
+        player->AddAura(SPELL_BOARING_PHASE, player);
     }
 
     void SendStatus(ChatHandler* handler, Player* player)
