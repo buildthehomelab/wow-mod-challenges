@@ -203,6 +203,16 @@ Challenges.SlowXP.Rate = 0.5
 Challenges.Boaring.FinishLevel = 60
 
 #
+#    Challenges.Boaring.MaxXPRate
+#        Description: The highest experience multiplier a Boaring Adventure character may have,
+#                     like Challenges.Hardcore.MaxXPRate: the personal XP rate, guild perks and
+#                     heirlooms are held to it. With Hardcore too, the lower cap counts. It lifts
+#                     with the rule at the finish level. 0: no cap.
+#        Default:     1
+
+Challenges.Boaring.MaxXPRate = 1
+
+#
 #    Challenges.Boaring.Rewards
 #        Description: Boaring Adventure's rewards at its finish level: the account-wide title the
 #                     Hambringer and the mount below; with Exhaustion and Slow XP running too, also

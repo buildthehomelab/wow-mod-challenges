@@ -273,6 +273,19 @@ namespace Challenges
             return (ActiveByGuid(guid) & CHALLENGE_HARDCORE) != 0;
         }
 
+        // The lowest experience cap among the running challenges (Hardcore, Boaring Adventure); 0 when
+        // none of them caps it.
+        float XpRateCapFor(uint16 active)
+        {
+            float cap = 0.0f;
+            auto lower = [&cap](float rate) { if (rate > 0.0f && (cap == 0.0f || rate < cap)) cap = rate; };
+            if (active & CHALLENGE_HARDCORE)
+                lower(config.hardcoreMaxXpRate);
+            if (active & CHALLENGE_BOARING)
+                lower(config.boaringMaxXpRate);
+            return cap;
+        }
+
         // The character cache follows every level-up, and knows characters that are offline.
         uint8 CachedLevel(ObjectGuid::LowType guid)
         {
@@ -579,6 +592,7 @@ namespace Challenges
         config.selfFoundMoneyAllowance = sConfigMgr->GetOption<uint32>("Challenges.SelfFound.StartMoneyAllowance", 10000);
         config.slowXpRate = std::clamp(sConfigMgr->GetOption<float>("Challenges.SlowXP.Rate", 0.5f), 0.0f, 1.0f);
         config.boaringFinishLevel = sConfigMgr->GetOption<uint32>("Challenges.Boaring.FinishLevel", 60);
+        config.boaringMaxXpRate = std::max(0.0f, sConfigMgr->GetOption<float>("Challenges.Boaring.MaxXPRate", 1.0f));
         config.boaringRewards = sConfigMgr->GetOption<bool>("Challenges.Boaring.Rewards", true);
         config.boaringMountSpell = sConfigMgr->GetOption<uint32>("Challenges.Boaring.MountSpell", 400624);
         config.boaringSwordItem = sConfigMgr->GetOption<uint32>("Challenges.Boaring.SwordItem", 9507000);
@@ -744,6 +758,8 @@ namespace Challenges
                 std::string text = "Boaring Adventure: you gain experience only from killing boars. Quests, exploring, "
                     "battlegrounds and every other kill give none; your pet still learns from your kills. Herds of boars "
                     "that only boar hunters can see roam the zones and levels the world has none for.";
+                if (config.boaringMaxXpRate > 0.0f)
+                    text += Acore::StringFormat(" Experience at no more than {}x.", config.boaringMaxXpRate);
                 if (config.boaringFinishLevel)
                 {
                     text += Acore::StringFormat(" At level {} the challenge is done and its rule lifts.", config.boaringFinishLevel);
@@ -820,7 +836,7 @@ namespace Challenges
 
     float XpRateCap(ObjectGuid::LowType guid)
     {
-        return config.hardcoreMaxXpRate > 0.0f && HardcoreByGuid(guid) ? config.hardcoreMaxXpRate : 0.0f;
+        return XpRateCapFor(ActiveByGuid(guid));
     }
 
     std::string LevelRule(ObjectGuid::LowType a, uint8 levelA, ObjectGuid::LowType b, uint8 levelB)
@@ -1236,17 +1252,18 @@ namespace Challenges
             return;
         }
 
-        // Hardcore's cap also covers the core's own experience auras (heirlooms), which are already
-        // in the amount: kills carry SPELL_AURA_MOD_XP_PCT, quests SPELL_AURA_MOD_XP_QUEST_PCT.
-        if (config.hardcoreMaxXpRate > 0.0f && Has(player, CHALLENGE_HARDCORE))
+        // The experience cap (Hardcore, Boaring Adventure) also covers the core's own experience auras
+        // (heirlooms), which are already in the amount: kills carry SPELL_AURA_MOD_XP_PCT, quests
+        // SPELL_AURA_MOD_XP_QUEST_PCT.
+        if (float const cap = XpRateCapFor(Active(player)))
         {
             float multiplier = 1.0f;
             if (source == PlayerXPSource::XPSOURCE_KILL)
                 multiplier = player->GetTotalAuraMultiplier(SPELL_AURA_MOD_XP_PCT);
             else if (source == PlayerXPSource::XPSOURCE_QUEST || source == PlayerXPSource::XPSOURCE_QUEST_DF)
                 multiplier = player->GetTotalAuraMultiplier(SPELL_AURA_MOD_XP_QUEST_PCT);
-            if (multiplier > config.hardcoreMaxXpRate)
-                amount = uint32(std::lround(double(amount) * config.hardcoreMaxXpRate / multiplier));
+            if (multiplier > cap)
+                amount = uint32(std::lround(double(amount) * cap / multiplier));
         }
 
         uint16 const mask = Active(player) & (CHALLENGE_SLOW_XP | CHALLENGE_QUEST_XP_ONLY | CHALLENGE_BOARING);
