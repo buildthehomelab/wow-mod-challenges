@@ -255,7 +255,8 @@ See `conf/mod_challenges.conf.dist`. Every option has a comment.
   the ones a death ended in the high 16, a finished one in both (a finished Hardcore is
   `0x00010001`). It fills the column from its own table at every startup. Without the column
   nothing is written. An older core's SMALLINT column has a byte each and only the first seven
-  challenges; the module writes that layout there. The character select screen shows an icon for
+  challenges; the module writes that layout there. The Evermore core that widens the column has to go out together
+  with this version of the module: an older module would write the byte layout back into it. The character select screen shows an icon for
   each challenge: Boaring Adventure a boar, Exhaustion a sleeping moon.
 
 ## Installation

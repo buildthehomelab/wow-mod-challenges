@@ -139,6 +139,7 @@ namespace Challenges
         // level, and That Which Has No Life (190) when Exhaustion and Slow XP ran with it.
         constexpr uint32 ACHIEVEMENT_HAMBRINGER = 9271;
         constexpr uint32 ACHIEVEMENT_NO_LIFE = 9272;
+        constexpr uint32 REWARD_MAIL_DAYS = 3650;
         constexpr time_t NOTICE_INTERVAL = 5;
         constexpr uint8 LEARN_DEPTH = 3;
 
@@ -502,10 +503,12 @@ namespace Challenges
             Item* item = Item::CreateItem(itemId, 1, player);
             if (!item)
                 return;
-            // From the Shrine of Challenge: a game object's mail can't be returned to a player.
+            // From the Shrine of Challenge: a game object's mail can't be returned to a player. It is
+            // a reward that can't be earned again, so it waits for years rather than 30 days.
             CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
             item->SaveToDB(trans);
-            MailDraft(subject, body).AddItem(item).SendMailTo(trans, MailReceiver(player), MailSender(MAIL_GAMEOBJECT, SHRINE_ENTRY));
+            MailDraft(subject, body).AddItem(item).SendMailTo(trans, MailReceiver(player), MailSender(MAIL_GAMEOBJECT, SHRINE_ENTRY),
+                MAIL_CHECK_MASK_NONE, 0, REWARD_MAIL_DAYS);
             CharacterDatabase.CommitTransaction(trans);
             ChatHandler(player->GetSession()).SendSysMessage("Your bags are full: it waits in your mailbox.");
         }
@@ -1309,10 +1312,6 @@ namespace Challenges
             entry.finished |= CHALLENGE_BOARING;
             entry.milestone |= CHALLENGE_BOARING;
         });
-        // The finish goes to the database now; the mount and the sword with it, so a crash before the
-        // next save can't lose them.
-        if (config.boaringRewards)
-            player->SaveToDB(false, false);
 
         uint32 const now = uint32(GameTime::GetGameTime().count());
         CharacterDatabase.Execute("UPDATE `mod_challenges_character` SET `state` = 2, `milestone_at` = IF(`milestone_at` = 0, {0}, "
@@ -1320,6 +1319,10 @@ namespace Challenges
             "`challenge` = {5} AND `state` = 0", now, uint32(player->GetLevel()), player->GetMapId(), player->GetZoneId(),
             player->GetGUID().GetCounter(), uint32(CHALLENGE_BOARING));
         SaveSelectMarker(player);
+        // The mount and the sword are saved right behind the finish (one queue keeps the order), so a
+        // crash can neither lose them nor leave the challenge running to give them twice.
+        if (config.boaringRewards)
+            player->SaveToDB(false, false);
         UpdateBoaringPhase(player);
 
         ChatHandler(player->GetSession()).SendSysMessage(noLife ?
