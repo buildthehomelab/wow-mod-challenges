@@ -15,7 +15,7 @@
  *
  * An auction of a module's own closes for IsAuctionClosed(guid) instead (Self-Found and Hardcore),
  * and anything that raises experience keeps its multiplier at or below XpRateCap(guid) when that
- * is not 0 (Hardcore: 1x).
+ * is not 0 (Hardcore and Boaring Adventure: 1x).
  *
  * Released under the MIT License.
  */

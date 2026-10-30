@@ -114,6 +114,7 @@ namespace Challenges
         uint32 selfFoundMoneyAllowance = 10000;  // copper on top of the start money
         float slowXpRate = 0.5f;
         uint32 boaringFinishLevel = 60;          // 0 = it never finishes
+        float boaringMaxXpRate = 1.0f;           // 0 = no cap
         bool boaringRewards = true;
         uint32 boaringMountSpell = 400624;       // Wild Goretusk
         uint32 boaringSwordItem = 9507000;       // Sword of a Thousand Truths

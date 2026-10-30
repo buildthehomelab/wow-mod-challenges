@@ -12,7 +12,7 @@ character takes on at the start of its life:
 | **Slow XP** | Half the normal experience (configurable). | no |
 | **Quest XP Only** | Experience from quests only. | no |
 | **Item Quality Level** | Grey and white gear only. | no |
-| **Boaring Adventure** | Experience from killing boars only, until level 60. Herds of boars only its characters see fill the levels and zones the world has none for. A title and a mount at 60. | no |
+| **Boaring Adventure** | Experience from killing boars only, no more than 1x, until level 60. Herds of boars only its characters see fill the levels and zones the world has none for. A title and a mount at 60. | no |
 | **Exhaustion** | No rested experience. | no |
 
 Challenges can be combined, except that Iron Man can't be paired with Self-Crafted or Item Quality
@@ -167,6 +167,9 @@ Inspired by South Park's *Make Love, Not Warcraft*: level up by killing boars an
   Swine. Quilboars are people, not boars. Group kills count; each member gets their share as usual.
 - **No other experience**: quests, exploring, battlegrounds and every other kill give none. A
   hunter's pet still gets its share from every kill, so it keeps up.
+- **Experience**: never above 1x (`Challenges.Boaring.MaxXPRate`), held the same way as
+  Hardcore's: the personal rate, guild perks and heirlooms. With Hardcore too, the lower cap
+  counts. It lifts with the rule at level 60.
 - **Herds**: stock boars leave whole level ranges and start zones without any: none outside dungeons
   from level 18 to 47, none in Tirisfal, Teldrassil, Eversong or Azuremyst, none in the Barrens.
   The module adds 935 boars in 50 level bands, from piglets in every starting area to level 60
@@ -234,6 +237,7 @@ See `conf/mod_challenges.conf.dist`. Every option has a comment.
 | `Challenges.SelfFound.StartMoneyAllowance` | `10000` | Copper on top of the start money a character may carry when it takes Self-Found |
 | `Challenges.SlowXP.Rate` | `0.5` | Share of normal experience for Slow XP |
 | `Challenges.Boaring.FinishLevel` | `60` | Level at which Boaring Adventure is done and rewarded; 0 = never |
+| `Challenges.Boaring.MaxXPRate` | `1` | Highest experience multiplier for Boaring Adventure |
 | `Challenges.Boaring.Rewards` | `1` | Boaring Adventure's titles, mount and sword |
 | `Challenges.Boaring.MountSpell` | `400624` | Mount spell for finishing (Wild Goretusk) |
 | `Challenges.Boaring.SwordItem` | `9507000` | Item for finishing with Exhaustion and Slow XP |
