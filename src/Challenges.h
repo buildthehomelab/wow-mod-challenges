@@ -153,6 +153,9 @@ namespace Challenges
     // running; Hardcore's first milestone alive; Boaring Adventure finished), online or not,
     // whether or not they have ended since. Safe from any thread.
     uint16 Milestones(ObjectGuid::LowType guid);
+    // The challenges the character runs now (not ended, not turned off), online or not. Safe
+    // from any thread.
+    uint16 Running(ObjectGuid::LowType guid);
 
     // Hardcore's level rule. Why two characters may not mail, trade or group, by guid and level
     // (online or not); empty when they may. Safe from any thread.

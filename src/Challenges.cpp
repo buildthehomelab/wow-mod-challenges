@@ -846,6 +846,11 @@ namespace Challenges
         return itr != entries.end() ? itr->second.milestone : 0;
     }
 
+    uint16 Running(ObjectGuid::LowType guid)
+    {
+        return ActiveByGuid(guid);
+    }
+
     std::string LevelRule(ObjectGuid::LowType a, uint8 levelA, ObjectGuid::LowType b, uint8 levelB)
     {
         if (a == b || !LevelGap(levelA, levelB))
