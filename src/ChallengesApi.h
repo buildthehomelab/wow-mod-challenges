@@ -15,7 +15,10 @@
  *
  * An auction of a module's own closes for IsAuctionClosed(guid) instead (Self-Found and Hardcore),
  * and anything that raises experience keeps its multiplier at or below XpRateCap(guid) when that
- * is not 0 (Hardcore and Boaring Adventure: 1x).
+ * is not 0 (Hardcore and Boaring Adventure: 1x). Milestones(guid) has a bit (the Challenge
+ * values: 1 Hardcore, 2 Iron Man, 4 Self-Found, 8 Self-Crafted, 16 Slow XP, 32 Quest XP Only,
+ * 64 Item Quality Level, 128 Boaring Adventure, 256 Exhaustion) for each challenge the character
+ * reached its milestone in, so a module can reward it.
  *
  * Released under the MIT License.
  */
@@ -24,6 +27,10 @@
 #define MOD_CHALLENGES_API_H
 
 #include "ObjectGuid.h"
+
+// Milestones() is here; a module can test this before calling it, so it still builds against an
+// older copy of this header.
+#define CHALLENGES_API_HAS_MILESTONES
 
 namespace Challenges
 {
@@ -37,6 +44,11 @@ namespace Challenges
     // The highest experience multiplier the character's challenges allow, online or not; 0 when
     // they allow any. Safe from any thread.
     float XpRateCap(ObjectGuid::LowType guid);
+
+    // The challenges the character reached its milestone in, as Challenge bits: level
+    // Challenges.MilestoneLevel while running, Hardcore's first milestone alive, or Boaring
+    // Adventure finished. Kept when the challenge ends later. Online or not; safe from any thread.
+    uint16 Milestones(ObjectGuid::LowType guid);
 
     // Whether two characters may mail, trade or group under Hardcore's level rule. A module that
     // sends mail or items between characters itself (a bot's mail command) checks it. Safe from

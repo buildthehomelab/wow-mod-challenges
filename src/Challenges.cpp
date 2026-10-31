@@ -839,6 +839,13 @@ namespace Challenges
         return XpRateCapFor(ActiveByGuid(guid));
     }
 
+    uint16 Milestones(ObjectGuid::LowType guid)
+    {
+        std::shared_lock<std::shared_mutex> guard(lock);
+        auto itr = entries.find(guid);
+        return itr != entries.end() ? itr->second.milestone : 0;
+    }
+
     std::string LevelRule(ObjectGuid::LowType a, uint8 levelA, ObjectGuid::LowType b, uint8 levelB)
     {
         if (a == b || !LevelGap(levelA, levelB))
