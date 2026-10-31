@@ -59,3 +59,11 @@ INSERT INTO `item_dbc` (`ID`, `ClassID`, `SubclassID`, `Sound_Override_Subclassi
 DELETE FROM `item_template` WHERE `entry` = 9507000;
 INSERT INTO `item_template` (`entry`, `class`, `subclass`, `SoundOverrideSubclass`, `name`, `displayid`, `Quality`, `BuyCount`, `BuyPrice`, `SellPrice`, `InventoryType`, `AllowableClass`, `AllowableRace`, `ItemLevel`, `RequiredLevel`, `maxcount`, `stackable`, `dmg_min1`, `dmg_max1`, `delay`, `bonding`, `description`, `Material`, `sheath`, `MaxDurability`, `VerifiedBuild`) VALUES
 (9507000, 2, 14, 7, 'Sword of a Thousand Truths', 35575, 5, 1, 17, 3, 13, -1, -1, 1, 1, 1, 1, 1, 2, 2300, 1, 'It was foretold, that one day, heroes who could wield the sword might reveal themselves.', 1, 3, 20, 0);
+
+-- The Journal's Mounts tab can't see a reward the module hands out itself: a note on the Wild
+-- Goretusk (Challenges.Boaring.MountSpell) says where it comes from. Harmless without
+-- mod-forever-journal.
+CREATE TABLE IF NOT EXISTS `mod_forever_journal_collection_note` (`Kind` CHAR(1) NOT NULL, `ID` INT UNSIGNED NOT NULL, `Sort` TINYINT UNSIGNED NOT NULL DEFAULT 0, `Note` VARCHAR(200) NOT NULL, PRIMARY KEY (`Kind`,`ID`,`Sort`)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+DELETE FROM `mod_forever_journal_collection_note` WHERE `Kind` = 'M' AND `ID` = 400624 AND `Sort` = 60;
+INSERT INTO `mod_forever_journal_collection_note` (`Kind`, `ID`, `Sort`, `Note`) VALUES
+('M', 400624, 60, 'Boaring Adventure challenge: take it at a Shrine of Challenge while still level 1, then reach level 60 with experience only from killing boars.');
