@@ -144,7 +144,8 @@ challenge is refunded.
 - **Not covered**: a repair paid from the guild bank.
 - **Other modules**: shared items that a module hands out itself (an account-wide bank, an
   account wallet, an auction of its own) need a check in that module. `src/ChallengesApi.h` gives
-  them `Challenges::IsSelfFound(guid)`; see the comment at its top.
+  them `Challenges::IsSelfFound(guid)`, and `Challenges::Running(guid)` for the challenges a
+  character runs; see the comment at its top.
 
 ## Self-Crafted, XP and Item Quality details
 
